@@ -28,7 +28,7 @@ It supports fetching official server JARs directly from Mojang, creating isolate
 Clone the repository and run the installer:
 
 ```bash
-git clone https://github.com/yourusername/MCSmaker.git
+git clone https://github.com/Nico19422009/MCSmaker.git
 cd MCSmaker
 chmod +x install.sh
 ./install.sh
