@@ -8,8 +8,8 @@ sudo apt update
 echo "Installing Python3..."
 sudo apt install -y python3 python3-pip
 
-echo "Installing latest OpenJDK (23)..."
-sudo apt install -y openjdk-23-jdk
+echo "Installing latest OpenJDK "
+sudo apt install default-jdk
 
 echo "=== Installation complete! ==="
 echo "Python version: $(python3 --version)"
