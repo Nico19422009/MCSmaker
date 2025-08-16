@@ -3,13 +3,13 @@ set -e
 
 echo "=== MCSmaker Installer ==="
 echo "Updating package list..."
-sudo apt update -y
+sudo apt update
 
 echo "Installing Python3..."
 sudo apt install -y python3 python3-pip
 
-echo "Installing OpenJDK 17 (headless)..."
-sudo apt install -y openjdk-17-jre-headless
+echo "Installing latest OpenJDK (23)..."
+sudo apt install -y openjdk-23-jdk
 
 echo "=== Installation complete! ==="
 echo "Python version: $(python3 --version)"
