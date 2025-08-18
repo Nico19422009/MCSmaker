@@ -17,7 +17,7 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "1.2.0"
 
 
 # TODO: set your repo paths
@@ -555,22 +555,22 @@ def main_menu():
         print(r"""
 
 
-               __       __   ______    ______                           __                           
-/  \     /  | /      \  /      \                         /  |                          
-$$  \   /$$ |/$$$$$$  |/$$$$$$  | _____  ____    ______  $$ |   __   ______    ______  
-$$$  \ /$$$ |$$ |  $$/ $$ \__$$/ /     \/    \  /      \ $$ |  /  | /      \  /      \ 
-$$$$  /$$$$ |$$ |      $$      \ $$$$$$ $$$$  | $$$$$$  |$$ |_/$$/ /$$$$$$  |/$$$$$$  |
-$$ $$ $$/$$ |$$ |   __  $$$$$$  |$$ | $$ | $$ | /    $$ |$$   $$<  $$    $$ |$$ |  $$/ 
-$$ |$$$/ $$ |$$ \__/  |/  \__$$ |$$ | $$ | $$ |/$$$$$$$ |$$$$$$  \ $$$$$$$$/ $$ |      
-$$ | $/  $$ |$$    $$/ $$    $$/ $$ | $$ | $$ |$$    $$ |$$ | $$  |$$       |$$ |      
-$$/      $$/  $$$$$$/   $$$$$$/  $$/  $$/  $$/  $$$$$$$/ $$/   $$/  $$$$$$$/ $$/       
-                                                                                       
+                                                                                
+ mmm  mmm     mmmm     mmmm                        mm                           
+ ###  ###   ##""""#  m#""""#                       ##                           
+ ########  ##"       ##m       ####m##m   m#####m  ## m##"    m####m    ##m#### 
+ ## ## ##  ##         "####m   ## ## ##   " mmm##  ##m##     ##mmmm##   ##"     
+ ## "" ##  ##m            "##  ## ## ##  m##"""##  ##"##m    ##""""""   ##      
+ ##    ##   ##mmmm#  #mmmmm#"  ## ## ##  ##mmm###  ##  "#m   "##mmmm#   ##      
+ ""    ""     """"    """""    "" "" ""   """" ""  ""   """    """""    ""      
+                                                                                
+                                                                                                        
                                                                                        
                                                                                        
 
 
 
-                 MCSMAKER — Minecraft Automation Tool Created by Nico19422009 Ver 0.2.1
+                 MCSMAKER — Minecraft Automation Tool Created by Nico19422009 
 """)
         
         print(f"... MCSMAKER — Minecraft Automation Tool · v{CURRENT_VERSION}")
