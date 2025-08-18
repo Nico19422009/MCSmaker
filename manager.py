@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-import json, os, re, shutil, sys, time, urllib.request, urllib.error
+import json, os,  shutil, sys, time, urllib.request, urllib.error
 from pathlib import Path
-
+import re as _re
 # ================== CONFIG (persisted) ==================
 CONFIG_FILE = "mcauto.json"
 DEFAULTS = {
