@@ -21,8 +21,8 @@ CURRENT_VERSION = "1.0.0"
 
 
 # TODO: set your repo paths
-REMOTE_MANAGER_URL = "https://github.com/Nico19422009/MCSmaker/blob/main/manager.py"
-REMOTE_VERSION_URL = "https://github.com/Nico19422009/MCSmaker/blob/main/version.txt"
+REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/refs/heads/main/manager.py"
+REMOTE_VERSION_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/refs/heads/main/version.txt"
 
 
 
