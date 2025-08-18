@@ -35,7 +35,7 @@ def _http_get(url: str, timeout: int = 10) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/update-check"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
-
+import re
 SEMVER_RE = re.compile(r"^v?\d+(?:\.\d+){0,2}$")
 
 
