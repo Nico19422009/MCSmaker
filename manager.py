@@ -36,8 +36,8 @@ def _http_get(url: str, timeout: int = 10) -> bytes:
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
+SEMVER_RE = re.compile(r"^v?\d+(?:\.\d+){0,2}$")
 
-SEMVER_RE = _re.compile(r"^v?\d+(?:\.\d+){0,2}$")  # 1, 1.2, 1.2.3 oder mit v-Präfix
 
 def _parse_version(s: str) -> tuple[int,int,int] | None:
     s = s.strip()
