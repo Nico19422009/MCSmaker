@@ -12,6 +12,114 @@ DEFAULTS = {
 }
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
+
+
+
+# ------- Self-update config ----------
+APP_NAME = "MCSmaker"
+CURRENT_VERSION = "1.0.0"
+
+
+# TODO: set your repo paths
+REMOTE_MANAGER_URL = "https://github.com/Nico19422009/MCSmaker/blob/main/manager.py"
+REMOTE_VERSION_URL = "https://github.com/Nico19422009/MCSmaker/blob/main/version.txt"
+
+
+
+
+
+# ------ Update helpers --------- 
+
+
+def _http_get(url: str, timeout: int = 10) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/update-check"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+def _parse_version(s: str) -> tuple:
+    """'1.2.3' -> (1,2,3); robust gegen Zusätze wie '1.2.3-beta'."""
+    parts = []
+    for p in s.strip().split("."):
+        digits = "".join(ch for ch in p if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+def self_update() -> bool:
+    """Replace this file with latest manager.py from GitHub raw."""
+    dest = Path(__file__).resolve()
+    try:
+        print("[*] Downloading latest manager.py …")
+        data = _http_get(REMOTE_MANAGER_URL, timeout=20)
+        tmp = dest.with_suffix(dest.suffix + ".new")
+        with tmp.open("wb") as f:
+            f.write(data)
+        tmp.replace(dest)
+        print("[OK] manager.py updated! Please restart.")
+        return True
+    except urllib.error.HTTPError as e:
+        print(f"[ERR] Update failed (HTTP {e.code}): {e.reason}")
+    except urllib.error.URLError as e:
+        print(f"[ERR] Update failed (URL): {e.reason}")
+    except Exception as e:
+        print(f"[ERR] Update failed: {e}")
+    return False
+
+def check_for_updates(auto_prompt: bool = True) -> None:
+    """Check version.txt in repo; prompt to update if newer is available."""
+    try:
+        remote_ver = _http_get(REMOTE_VERSION_URL, timeout=6).decode("utf-8").strip()
+    except Exception as e:
+        print(f"[i] Update check skipped ({e.__class__.__name__}).")
+        return
+
+    cv = _parse_version(CURRENT_VERSION)
+    rv = _parse_version(remote_ver)
+
+    if rv > cv:
+        print(f"[UPDATE] New version available: {remote_ver} (current {CURRENT_VERSION})")
+        if auto_prompt:
+            ans = input("Update now? [Y/n] ").strip().lower()
+            if ans in ("", "y", "yes"):
+                if self_update():
+                    # Exit so user restarts into new code
+                    sys.exit(0)
+                else:
+                    print("[!] Update attempt failed. Try again later.")
+        else:
+            print("Tip: run 'Update program' from the menu.")
+    else:
+        print(f"[OK] You are up to date (v{CURRENT_VERSION}).")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ================== UTILITIES ==================
 def clear(): os.system("cls" if os.name == "nt" else "clear")
 
@@ -417,6 +525,15 @@ def settings_menu(cfg: dict):
 
 # ================== MAIN MENU ==================
 def main_menu():
+    
+    # Update check function 
+
+    check_for_updates(auto_prompt=True)
+
+    
+    
+    
+    
     cfg = load_cfg()
     Path(cfg["jars_dir"]).expanduser().mkdir(parents=True, exist_ok=True)
     Path(cfg["servers_base"]).expanduser().mkdir(parents=True, exist_ok=True)
@@ -446,13 +563,29 @@ $$/      $$/  $$$$$$/   $$$$$$/  $$/  $$/  $$/  $$$$$$$/ $$/   $$/  $$$$$$$/ $$/
         print("1) JARs")
         print("2) Servers")
         print("3) Settings")
+        print("U) Update Programm")
         print("0) Exit")
         c = input("\nChoose: ").strip()
         if c == "1": jars_menu(cfg)
         elif c == "2": servers_menu(cfg)
         elif c == "3": settings_menu(cfg)
         elif c == "0": print("[BYE]"); break
+       
+        elif c == "u":
+            self_update()
+            input("Press ENTER…")
+        elif c == "0":
+            print("[BYE]"); break
+       
+       
+       
+       
+       
+       
+       
         else: print("[WARN] Unknown option."); time.sleep(0.6)
+       
+
 
 if __name__ == "__main__":
     try:
