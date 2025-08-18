@@ -39,7 +39,14 @@ import re
 SEMVER_RE = re.compile(r"^v?\d+(?:\.\d+){0,2}$")
 
 
-def _parse_version(s: str) -> tuple[int,int,int] | None:
+def _http_get(url: str, timeout: int = 10) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/update-check"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+SEMVER_RE = re.compile(r"^v?\d+(?:\.\d+){0,2}$")  # 1 / 1.2 / 1.2.3 (optional v)
+
+def _parse_version(s: str):
     s = s.strip()
     if not SEMVER_RE.match(s):
         return None
@@ -48,10 +55,7 @@ def _parse_version(s: str) -> tuple[int,int,int] | None:
     while len(parts) < 3: parts.append(0)
     return tuple(parts[:3])
 
-
-
 def self_update() -> bool:
-    """Replace this file with latest manager.py from GitHub raw."""
     dest = Path(__file__).resolve()
     try:
         print("[*] Downloading latest manager.py …")
@@ -84,7 +88,7 @@ def check_for_updates(auto_prompt: bool = True) -> None:
         print(f"[i] Update check skipped (invalid remote version: {raw!r}).")
         return
     if cv is None:
-        print(f"[i] Local CURRENT_VERSION invalid ({CURRENT_VERSION!r}). Set a proper semver like 1.0.0")
+        print(f"[i] Local CURRENT_VERSION invalid ({CURRENT_VERSION!r}). Use e.g. 1.0.0")
         return
 
     if rv > cv:
@@ -93,14 +97,13 @@ def check_for_updates(auto_prompt: bool = True) -> None:
             ans = input("Update now? [Y/n] ").strip().lower()
             if ans in ("", "y", "yes"):
                 if self_update():
-                    sys.exit(0)
+                    sys.exit(0)   # exit so restart uses the new file
                 else:
                     print("[!] Update attempt failed. Try again later.")
         else:
             print("Tip: run 'Update program' from the menu.")
     else:
         print(f"[OK] You are up to date (v{CURRENT_VERSION}).")
-
 
 
 
@@ -569,6 +572,9 @@ $$/      $$/  $$$$$$/   $$$$$$/  $$/  $$/  $$/  $$$$$$$/ $$/   $$/  $$$$$$$/ $$/
 
                  MCSMAKER — Minecraft Automation Tool Created by Nico19422009 Ver 0.2.1
 """)
+        
+        print(f"... MCSMAKER — Minecraft Automation Tool · v{CURRENT_VERSION}")
+
         print("1) JARs")
         print("2) Servers")
         print("3) Settings")
