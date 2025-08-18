@@ -441,7 +441,7 @@ $$/      $$/  $$$$$$/   $$$$$$/  $$/  $$/  $$/  $$$$$$$/ $$/   $$/  $$$$$$$/ $$/
 
 
 
-                 MCSMAKER — Minecraft Automation Tool Created by Nico19422009
+                 MCSMAKER — Minecraft Automation Tool Created by Nico19422009 Ver 0.2.1
 """)
         print("1) JARs")
         print("2) Servers")
