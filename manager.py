@@ -17,7 +17,7 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.2.0"
+CURRENT_VERSION = "1.3.0"
 
 
 # TODO: set your repo paths
@@ -556,14 +556,11 @@ def main_menu():
 
 
                                                                                 
- mmm  mmm     mmmm     mmmm                        mm                           
- ###  ###   ##""""#  m#""""#                       ##                           
- ########  ##"       ##m       ####m##m   m#####m  ## m##"    m####m    ##m#### 
- ## ## ##  ##         "####m   ## ## ##   " mmm##  ##m##     ##mmmm##   ##"     
- ## "" ##  ##m            "##  ## ## ##  m##"""##  ##"##m    ##""""""   ##      
- ##    ##   ##mmmm#  #mmmmm#"  ## ## ##  ##mmm###  ##  "#m   "##mmmm#   ##      
- ""    ""     """"    """""    "" "" ""   """" ""  ""   """    """""    ""      
-                                                                                
+ _______ ______ _______                  __               
+|   |   |      |     __|.--------.---.-.|  |--.-----.----.
+|       |   ---|__     ||        |  _  ||    <|  -__|   _|
+|__|_|__|______|_______||__|__|__|___._||__|__|_____|__|  
+                                                                   
                                                                                                         
                                                                                        
                                                                                        
