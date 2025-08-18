@@ -82,6 +82,48 @@ def download_with_resume(url: str, dest: Path) -> bool:
     print(f"[OK] Saved → {dest}")
     return True
 
+# ================== RAM NORMALIZATION & HEAP SAFETY ==================
+import re as _re
+
+def normalize_ram(value: str, fallback: str = "4G") -> str:
+    """Accepts '4G', '4GB', '4096', '4096M', '2048MB', '2 g', etc. → returns JVM-safe '4G'/'4096M'."""
+    if not value:
+        return fallback
+    v = value.strip().upper().replace(" ", "")
+    v = _re.sub(r"B$", "", v)  # strip optional trailing B
+    m = _re.match(r"^(\d+)([KMG]?)$", v)
+    if not m:
+        return fallback
+    num, unit = m.groups()
+    if unit in ("K", "M", "G") and int(num) > 0:
+        return f"{num}{unit}"
+    # No unit → assume MB if big, else GB
+    n = int(num)
+    if n >= 256:
+        return f"{n}M"
+    return f"{n}G"
+
+def _total_mem_mb_linux() -> int | None:
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    kb = int(line.split()[1])
+                    return kb // 1024
+    except Exception:
+        return None
+    return None
+
+def warn_if_heap_too_big(mem_str: str):
+    m = _re.match(r"^(\d+)([MG])$", mem_str.upper())
+    if not m:
+        return
+    n, u = int(m.group(1)), m.group(2)
+    want_mb = n * (1024 if u == 'G' else 1)
+    total = _total_mem_mb_linux()
+    if total and want_mb > int(total * 0.85):
+        print(f"[WARN] Requested heap {want_mb}MB is close to/above system RAM {total}MB. Consider lowering it.")
+
 # ================== MOJANG PICKER ==================
 def pick_version_interactive(versions: list[dict]) -> dict | None:
     show = versions[:30]  # latest 30
@@ -202,14 +244,15 @@ def jars_menu(cfg: dict):
 
 # ================== SERVERS MENU ==================
 def write_start_sh(folder: Path, jar_name: str, java_path="java", memory="4G"):
+    mem = normalize_ram(memory, "4G")
     sh = f"""#!/usr/bin/env bash
 cd "$(dirname "$0")"
-{java_path} -Xms{memory} -Xmx{memory} -jar "{jar_name}" nogui
+{java_path} -Xms{mem} -Xmx{mem} -jar "{jar_name}" nogui
 """
     write_text(folder / "start.sh", sh, 0o755)
     bat = f"""@echo off
 cd /d %~dp0
-{java_path} -Xms{memory} -Xmx{memory} -jar "{jar_name}" nogui
+{java_path} -Xms{mem} -Xmx{mem} -jar "{jar_name}" nogui
 pause
 """
     write_text(folder / "start.bat", bat)
@@ -237,7 +280,10 @@ def create_server_folder(base_dir: Path, server_name: str, version_id: str, jar_
         "enable-status=true"
     ]
     write_text(folder / "server.properties", "\n".join(props) + "\n")
-    write_start_sh(folder, jar_name, java_path, memory)
+    # Normalize & warn before writing launcher scripts
+    mem_norm = normalize_ram(memory, "4G")
+    warn_if_heap_too_big(mem_norm)
+    write_start_sh(folder, jar_name, java_path, mem_norm)
     print(f"[DONE] Server ready at: {folder}")
     print("Start it with: ./start.sh  (Linux)  or  start.bat (Windows)")
     return True
@@ -362,8 +408,10 @@ def settings_menu(cfg: dict):
             p = input("Java path (e.g., java or /usr/bin/java): ").strip()
             if p: cfg["java_path"] = p; save_cfg(cfg)
         elif c == "4":
-            p = input("Default RAM (e.g., 4G): ").strip()
-            if p: cfg["memory"] = p; save_cfg(cfg)
+            p = input("Default RAM (e.g., 4G or 4096M): ").strip()
+            if p:
+                cfg["memory"] = normalize_ram(p, cfg["memory"])  # sanitize
+                save_cfg(cfg)
         elif c == "0":
             break
 
