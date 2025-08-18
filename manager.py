@@ -36,15 +36,19 @@ def _http_get(url: str, timeout: int = 10) -> bytes:
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
-def _parse_version(s: str) -> tuple:
-    """'1.2.3' -> (1,2,3); robust gegen Zusätze wie '1.2.3-beta'."""
-    parts = []
-    for p in s.strip().split("."):
-        digits = "".join(ch for ch in p if ch.isdigit())
-        parts.append(int(digits) if digits else 0)
-    while len(parts) < 3:
-        parts.append(0)
+
+SEMVER_RE = _re.compile(r"^v?\d+(?:\.\d+){0,2}$")  # 1, 1.2, 1.2.3 oder mit v-Präfix
+
+def _parse_version(s: str) -> tuple[int,int,int] | None:
+    s = s.strip()
+    if not SEMVER_RE.match(s):
+        return None
+    if s.startswith("v"): s = s[1:]
+    parts = [int(p) for p in s.split(".")]
+    while len(parts) < 3: parts.append(0)
     return tuple(parts[:3])
+
+
 
 def self_update() -> bool:
     """Replace this file with latest manager.py from GitHub raw."""
@@ -67,23 +71,28 @@ def self_update() -> bool:
     return False
 
 def check_for_updates(auto_prompt: bool = True) -> None:
-    """Check version.txt in repo; prompt to update if newer is available."""
     try:
-        remote_ver = _http_get(REMOTE_VERSION_URL, timeout=6).decode("utf-8").strip()
+        raw = _http_get(REMOTE_VERSION_URL, timeout=6).decode("utf-8", errors="replace").strip()
     except Exception as e:
         print(f"[i] Update check skipped ({e.__class__.__name__}).")
         return
 
+    rv = _parse_version(raw)
     cv = _parse_version(CURRENT_VERSION)
-    rv = _parse_version(remote_ver)
+
+    if rv is None:
+        print(f"[i] Update check skipped (invalid remote version: {raw!r}).")
+        return
+    if cv is None:
+        print(f"[i] Local CURRENT_VERSION invalid ({CURRENT_VERSION!r}). Set a proper semver like 1.0.0")
+        return
 
     if rv > cv:
-        print(f"[UPDATE] New version available: {remote_ver} (current {CURRENT_VERSION})")
+        print(f"[UPDATE] New version available: {raw} (current {CURRENT_VERSION})")
         if auto_prompt:
             ans = input("Update now? [Y/n] ").strip().lower()
             if ans in ("", "y", "yes"):
                 if self_update():
-                    # Exit so user restarts into new code
                     sys.exit(0)
                 else:
                     print("[!] Update attempt failed. Try again later.")
