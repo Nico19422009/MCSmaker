@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-import json, os,  shutil, sys, time, urllib.request, urllib.error
+import json, os, re, shutil, sys, time, urllib.request, urllib.error, subprocess
 from pathlib import Path
-import re as _re
+
 # ================== CONFIG (persisted) ==================
 CONFIG_FILE = "mcauto.json"
 DEFAULTS = {
@@ -12,47 +12,44 @@ DEFAULTS = {
 }
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
-
-
-
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.3.0"
+CURRENT_VERSION = "1.4.0"  # Keep in sync with version.txt in the repo
 
+# RAW GitHub URLs (must be raw.githubusercontent.com)
+REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/manager.py"
+REMOTE_VERSION_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/version.txt"
 
-# TODO: set your repo paths
-REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/refs/heads/main/manager.py"
-REMOTE_VERSION_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/refs/heads/main/version.txt"
+# ------ Update helpers ---------
+import urllib.request, urllib.error
 
+SEMVER_RE = re.compile(r"^v?\d+(?:\.\d+){0,2}$")  # 1 / 1.2 / 1.2.3 (optional leading 'v')
 
-
-
-
-# ------ Update helpers --------- 
-
-
-def _http_get(url: str, timeout: int = 10) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/update-check"})
+def _http_get(url: str, timeout: int = 10, cache_bust: bool = True) -> bytes:
+    if cache_bust:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}_ts={int(time.time())}"  # cache buster vs CDN caching
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": f"{APP_NAME}/update-check",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
+    )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
-import re
-SEMVER_RE = re.compile(r"^v?\d+(?:\.\d+){0,2}$")
-
-
-def _http_get(url: str, timeout: int = 10) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/update-check"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
-
-SEMVER_RE = re.compile(r"^v?\d+(?:\.\d+){0,2}$")  # 1 / 1.2 / 1.2.3 (optional v)
 
 def _parse_version(s: str):
-    s = s.strip()
+    # robust parsing: strip BOM/CR/whitespace, allow v-prefix
+    s = s.lstrip("\ufeff").strip().replace("\r", "")
     if not SEMVER_RE.match(s):
         return None
-    if s.startswith("v"): s = s[1:]
+    if s.startswith("v"):
+        s = s[1:]
     parts = [int(p) for p in s.split(".")]
-    while len(parts) < 3: parts.append(0)
+    while len(parts) < 3:
+        parts.append(0)
     return tuple(parts[:3])
 
 def self_update() -> bool:
@@ -60,11 +57,17 @@ def self_update() -> bool:
     try:
         print("[*] Downloading latest manager.py …")
         data = _http_get(REMOTE_MANAGER_URL, timeout=20)
+        # Quick sanity check: should not be HTML
+        if data[:1] == b"<":
+            print("[ERR] Download looked like HTML (wrong URL?). Aborting.")
+            return False
         tmp = dest.with_suffix(dest.suffix + ".new")
         with tmp.open("wb") as f:
             f.write(data)
         tmp.replace(dest)
-        print("[OK] manager.py updated! Please restart.")
+        print("[OK] manager.py updated! Restarting…")
+        # Restart into the new file
+        os.execv(sys.executable, [sys.executable, str(dest)])
         return True
     except urllib.error.HTTPError as e:
         print(f"[ERR] Update failed (HTTP {e.code}): {e.reason}")
@@ -74,15 +77,19 @@ def self_update() -> bool:
         print(f"[ERR] Update failed: {e}")
     return False
 
-def check_for_updates(auto_prompt: bool = True) -> None:
+def check_for_updates(auto_prompt: bool = True, debug: bool = False) -> None:
     try:
-        raw = _http_get(REMOTE_VERSION_URL, timeout=6).decode("utf-8", errors="replace").strip()
+        raw = _http_get(REMOTE_VERSION_URL, timeout=6).decode("utf-8", errors="replace")
     except Exception as e:
         print(f"[i] Update check skipped ({e.__class__.__name__}).")
         return
 
     rv = _parse_version(raw)
     cv = _parse_version(CURRENT_VERSION)
+
+    if debug:
+        print(f"[dbg] remote raw: {repr(raw)}")
+        print(f"[dbg] parsed remote: {rv}, local: {cv}")
 
     if rv is None:
         print(f"[i] Update check skipped (invalid remote version: {raw!r}).")
@@ -92,45 +99,15 @@ def check_for_updates(auto_prompt: bool = True) -> None:
         return
 
     if rv > cv:
-        print(f"[UPDATE] New version available: {raw} (current {CURRENT_VERSION})")
+        print(f"[UPDATE] New version available: {raw.strip()} (current {CURRENT_VERSION})")
         if auto_prompt:
             ans = input("Update now? [Y/n] ").strip().lower()
             if ans in ("", "y", "yes"):
-                if self_update():
-                    sys.exit(0)   # exit so restart uses the new file
-                else:
-                    print("[!] Update attempt failed. Try again later.")
+                self_update()
         else:
             print("Tip: run 'Update program' from the menu.")
     else:
         print(f"[OK] You are up to date (v{CURRENT_VERSION}).")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 # ================== UTILITIES ==================
 def clear(): os.system("cls" if os.name == "nt" else "clear")
@@ -156,7 +133,7 @@ def write_text(path: Path, content: str, mode=0o644):
     except: pass
 
 def fetch_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "McAuto/1.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "MCSmaker/1.4.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.load(resp)
 
@@ -165,7 +142,7 @@ def download_with_resume(url: str, dest: Path) -> bool:
     part = dest.with_suffix(dest.suffix + ".part")
     if dest.exists():
         print(f"[SKIP] {dest.name} already exists."); return True
-    headers = {"User-Agent": "McAuto/1.1"}
+    headers = {"User-Agent": "MCSmaker/1.4.0"}
     downloaded = 0
     if part.exists():
         downloaded = part.stat().st_size
@@ -203,15 +180,13 @@ def download_with_resume(url: str, dest: Path) -> bool:
     return True
 
 # ================== RAM NORMALIZATION & HEAP SAFETY ==================
-import re as _re
-
 def normalize_ram(value: str, fallback: str = "4G") -> str:
     """Accepts '4G', '4GB', '4096', '4096M', '2048MB', '2 g', etc. → returns JVM-safe '4G'/'4096M'."""
     if not value:
         return fallback
     v = value.strip().upper().replace(" ", "")
-    v = _re.sub(r"B$", "", v)  # strip optional trailing B
-    m = _re.match(r"^(\d+)([KMG]?)$", v)
+    v = re.sub(r"B$", "", v)  # strip optional trailing B
+    m = re.match(r"^(\d+)([KMG]?)$", v)
     if not m:
         return fallback
     num, unit = m.groups()
@@ -235,7 +210,7 @@ def _total_mem_mb_linux() -> int | None:
     return None
 
 def warn_if_heap_too_big(mem_str: str):
-    m = _re.match(r"^(\d+)([MG])$", mem_str.upper())
+    m = re.match(r"^(\d+)([MG])$", mem_str.upper())
     if not m:
         return
     n, u = int(m.group(1)), m.group(2)
@@ -243,6 +218,49 @@ def warn_if_heap_too_big(mem_str: str):
     total = _total_mem_mb_linux()
     if total and want_mb > int(total * 0.85):
         print(f"[WARN] Requested heap {want_mb}MB is close to/above system RAM {total}MB. Consider lowering it.")
+
+# ================== DEPENDENCY CHECK (apt) ==================
+REQUIRED_PKGS = [
+    "screen",
+]
+
+def _dpkg_installed(pkg: str) -> bool:
+    res = subprocess.run(["dpkg", "-s", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return res.returncode == 0
+
+def check_and_install_dependencies():
+    print("[*] Checking dependencies…")
+
+    # ---- Java (any JDK/JRE) ----
+    java_path = shutil.which("java")
+    if not java_path:
+        print("[WARN] No Java found on system. Installing default-jdk via apt…")
+        try:
+            subprocess.run(["sudo", "apt-get", "update", "-y"], check=True)
+            subprocess.run(["sudo", "apt-get", "install", "-y", "default-jdk"], check=True)
+            print("[OK] Java installed.")
+        except Exception as e:
+            print(f"[ERR] Could not install Java automatically: {e}")
+            print("Please install manually: sudo apt-get install default-jdk")
+    else:
+        try:
+            ver = subprocess.check_output(["java", "-version"], stderr=subprocess.STDOUT).decode().splitlines()[0]
+        except Exception:
+            ver = "(version unknown)"
+        print(f"[OK] Found Java at {java_path} {ver}")
+
+    # ---- Other packages ----
+    missing = [pkg for pkg in REQUIRED_PKGS if not _dpkg_installed(pkg)]
+    if missing:
+        print(f"[WARN] Missing packages: {', '.join(missing)}")
+        try:
+            subprocess.run(["sudo", "apt-get", "install", "-y"] + missing, check=True)
+            print("[OK] Dependencies installed.")
+        except Exception as e:
+            print(f"[ERR] Could not install: {e}")
+            print("Please install manually: sudo apt-get install " + " ".join(missing))
+    else:
+        print("[OK] All other dependencies already installed.")
 
 # ================== MOJANG PICKER ==================
 def pick_version_interactive(versions: list[dict]) -> dict | None:
@@ -285,7 +303,7 @@ def jars_menu(cfg: dict):
 
     while True:
         clear()
-        print("=== McAuto · JARs ===")
+        print("=== MCSmaker · JARs ===")
         print(f"JARs dir: {jars_dir}")
         print("[1] Download JAR from Mojang (pick version)")
         print("[2] Download JAR from Mojang & save to servers.json")
@@ -438,7 +456,7 @@ def servers_menu(cfg: dict):
 
     while True:
         clear()
-        print("=== McAuto · Servers ===")
+        print("=== MCSmaker · Servers ===")
         print(f"Base dir: {base_dir}   |   Default RAM: {cfg['memory']}   |   Java: {cfg['java_path']}")
         print("[1] Build full server (choose Mojang version)")
         print("[2] Show servers")
@@ -511,7 +529,7 @@ def servers_menu(cfg: dict):
 def settings_menu(cfg: dict):
     while True:
         clear()
-        print("=== McAuto · Settings ===")
+        print("=== MCSmaker · Settings ===")
         print(f"1) JARs dir         : {cfg['jars_dir']}")
         print(f"2) Servers base dir : {cfg['servers_base']}")
         print(f"3) Java path        : {cfg['java_path']}")
@@ -537,67 +555,54 @@ def settings_menu(cfg: dict):
 
 # ================== MAIN MENU ==================
 def main_menu():
-    
-    # Update check function 
-
+    # First-time environment checks
+    check_and_install_dependencies()
+    # Update check
     check_for_updates(auto_prompt=True)
 
-    
-    
-    
-    
     cfg = load_cfg()
     Path(cfg["jars_dir"]).expanduser().mkdir(parents=True, exist_ok=True)
     Path(cfg["servers_base"]).expanduser().mkdir(parents=True, exist_ok=True)
 
     while True:
         clear()
-        print(r"""
+        print(rf"""
+
+ <|\        /|>    /v     v\        /v     v\   <|\        /|>         <|>         <|>       /v   <|    v       <|     v\      
+ / \\o    o// \   />       <\      />       <\  / \\o    o// \         / \         / >      />    < >           / \     <\     
+ \o/ v\  /v \o/  _\o____         o/             \o/ v\  /v \o/       o/   \o       \o__ __o/       |            \o/     o/     
+  |   <\/>   |        \_\__o__  <|               |   <\/>   |       <|__ __|>       |__ __|        o__/_         |__  _<|      
+ / \        / \             \    \\             / \        / \      /       \       |      \       |             |       \     
+ \o/        \o/   \         /      \         /  \o/        \o/    o/         \o    <o>      \o    <o>           <o>       \o   
+  |          |     o       o        o       o    |          |    /v           v\    |        v\    |             |         v\  
+ / \        / \    <\__ __/>        <\__ __/>   / \        / \  />             <\  / \        <\  / \  _\o__/_  / \         <\ 
+              
 
 
-                                                                                
- _______ ______ _______                  __               
-|   |   |      |     __|.--------.---.-.|  |--.-----.----.
-|       |   ---|__     ||        |  _  ||    <|  -__|   _|
-|__|_|__|______|_______||__|__|__|___._||__|__|_____|__|  
-                                                                   
-                                                                                                        
-                                                                                       
-                                                                                       
 
 
 
-                 MCSMAKER — Minecraft Automation Tool Created by Nico19422009 
+                 MCSMAKER — Minecraft Automation Tool by Nico19422009 · v{CURRENT_VERSION}
 """)
-        
-        print(f"... MCSMAKER — Minecraft Automation Tool · v{CURRENT_VERSION}")
-
         print("1) JARs")
         print("2) Servers")
         print("3) Settings")
-        print("U) Update Programm")
+        print("U) Update program")
         print("0) Exit")
-        c = input("\nChoose: ").strip()
-        if c == "1": jars_menu(cfg)
-        elif c == "2": servers_menu(cfg)
-        elif c == "3": settings_menu(cfg)
-        elif c == "0": print("[BYE]"); break
-       
+        c = input("\nChoose: ").strip().lower()
+        if c == "1":
+            jars_menu(cfg)
+        elif c == "2":
+            servers_menu(cfg)
+        elif c == "3":
+            settings_menu(cfg)
         elif c == "u":
             self_update()
             input("Press ENTER…")
         elif c == "0":
             print("[BYE]"); break
-       
-       
-       
-       
-       
-       
-       
-        else: print("[WARN] Unknown option."); time.sleep(0.6)
-       
-
+        else:
+            print("[WARN] Unknown option."); time.sleep(0.6)
 
 if __name__ == "__main__":
     try:
