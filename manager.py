@@ -14,7 +14,7 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.4.2"  # Keep in sync with version.txt in the repo
+CURRENT_VERSION = "1.5.0"  # Keep in sync with version.txt in the repo
 
 # RAW GitHub URLs (must be raw.githubusercontent.com)
 REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/manager.py"
@@ -110,6 +110,7 @@ def check_for_updates(auto_prompt: bool = True, debug: bool = False) -> None:
         print(f"[OK] You are up to date (v{CURRENT_VERSION}).")
 
 # ================== UTILITIES ==================
+
 def clear(): os.system("cls" if os.name == "nt" else "clear")
 
 def load_cfg() -> dict:
@@ -180,22 +181,20 @@ def download_with_resume(url: str, dest: Path) -> bool:
     return True
 
 # ================== RAM NORMALIZATION & HEAP SAFETY ==================
+
 def normalize_ram(value: str, fallback: str = "4G") -> str:
     """Accepts '4G', '4GB', '4096', '4096M', '2048MB', '2 g', etc. → returns JVM-safe '4G'/'4096M'."""
-    if not value:
-        return fallback
+    if not value: return fallback
     v = value.strip().upper().replace(" ", "")
     v = re.sub(r"B$", "", v)  # strip optional trailing B
     m = re.match(r"^(\d+)([KMG]?)$", v)
-    if not m:
-        return fallback
+    if not m: return fallback
     num, unit = m.groups()
     if unit in ("K", "M", "G") and int(num) > 0:
         return f"{num}{unit}"
     # No unit → assume MB if big, else GB
     n = int(num)
-    if n >= 256:
-        return f"{n}M"
+    if n >= 256: return f"{n}M"
     return f"{n}G"
 
 def _total_mem_mb_linux() -> int | None:
@@ -203,16 +202,14 @@ def _total_mem_mb_linux() -> int | None:
         with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemTotal:"):
-                    kb = int(line.split()[1])
-                    return kb // 1024
+                    kb = int(line.split()[1]); return kb // 1024
     except Exception:
         return None
     return None
 
 def warn_if_heap_too_big(mem_str: str):
     m = re.match(r"^(\d+)([MG])$", mem_str.upper())
-    if not m:
-        return
+    if not m: return
     n, u = int(m.group(1)), m.group(2)
     want_mb = n * (1024 if u == 'G' else 1)
     total = _total_mem_mb_linux()
@@ -223,6 +220,8 @@ def warn_if_heap_too_big(mem_str: str):
 REQUIRED_PKGS = [
     "python3",
     "default-jdk",
+    # screen for live console mgmt
+    "screen",
 ]
 
 def _dpkg_installed(pkg: str) -> bool:
@@ -232,7 +231,7 @@ def _dpkg_installed(pkg: str) -> bool:
 def check_and_install_dependencies():
     print("[*] Checking dependencies…")
 
-    # ---- Java (any JDK/JRE) ----
+    # ---- Java ----
     java_path = shutil.which("java")
     if not java_path:
         print("[WARN] No Java found on system. Installing default-jdk via apt…")
@@ -244,10 +243,8 @@ def check_and_install_dependencies():
             print(f"[ERR] Could not install Java automatically: {e}")
             print("Please install manually: sudo apt-get install default-jdk")
     else:
-        try:
-            ver = subprocess.check_output(["java", "-version"], stderr=subprocess.STDOUT).decode().splitlines()[0]
-        except Exception:
-            ver = "(version unknown)"
+        try: ver = subprocess.check_output(["java", "-version"], stderr=subprocess.STDOUT).decode().splitlines()[0]
+        except Exception: ver = "(version unknown)"
         print(f"[OK] Found Java at {java_path} {ver}")
 
     # ---- Other packages ----
@@ -264,6 +261,7 @@ def check_and_install_dependencies():
         print("[OK] All other dependencies already installed.")
 
 # ================== MOJANG PICKER ==================
+
 def pick_version_interactive(versions: list[dict]) -> dict | None:
     show = versions[:30]  # latest 30
     while True:
@@ -291,6 +289,7 @@ def get_server_jar_url(ver_obj: dict) -> str:
     return dl["server"]["url"]
 
 # ================== JARs MENU ==================
+
 def jars_menu(cfg: dict):
     jars_dir = Path(cfg["jars_dir"]).expanduser().resolve()
     jars_dir.mkdir(parents=True, exist_ok=True)
@@ -359,7 +358,7 @@ def jars_menu(cfg: dict):
             except: idx = -1
             if not (0 <= idx < len(servers)): print("[WARN] Invalid."); input("Press ENTER…"); continue
             name = safe_name(servers[idx].get("name") or f"server_{idx+1}")
-            url  = servers[idx].get("url","").strip()
+            url  = servers[idx].get("url","\n").strip()
             if not url: print("[ERR] Missing URL."); input("Press ENTER…"); continue
             dest = jars_dir / f"{name}.jar"
             download_with_resume(url, dest)
@@ -370,7 +369,7 @@ def jars_menu(cfg: dict):
             if not servers: print("[INFO] servers.json empty."); input("Press ENTER…"); continue
             for i, s in enumerate(servers, 1):
                 name = safe_name(s.get("name") or f"server_{i}")
-                url  = s.get("url","").strip()
+                url  = s.get("url","\n").strip()
                 if not url: print(f"[SKIP] {name}: missing URL."); continue
                 dest = jars_dir / f"{name}.jar"
                 download_with_resume(url, dest)
@@ -381,7 +380,8 @@ def jars_menu(cfg: dict):
         else:
             print("[WARN] Unknown option."); time.sleep(0.6)
 
-# ================== SERVERS MENU ==================
+# ================== LAUNCH SCRIPTS ==================
+
 def write_start_sh(folder: Path, jar_name: str, java_path="java", memory="4G"):
     mem = normalize_ram(memory, "4G")
     sh = f"""#!/usr/bin/env bash
@@ -395,6 +395,8 @@ cd /d %~dp0
 pause
 """
     write_text(folder / "start.bat", bat)
+
+# ================== SERVER CREATE/DISCOVER ==================
 
 def create_server_folder(base_dir: Path, server_name: str, version_id: str, jar_url: str, java_path: str, memory: str):
     folder = base_dir / safe_name(server_name)
@@ -419,7 +421,6 @@ def create_server_folder(base_dir: Path, server_name: str, version_id: str, jar_
         "enable-status=true"
     ]
     write_text(folder / "server.properties", "\n".join(props) + "\n")
-    # Normalize & warn before writing launcher scripts
     mem_norm = normalize_ram(memory, "4G")
     warn_if_heap_too_big(mem_norm)
     write_start_sh(folder, jar_name, java_path, mem_norm)
@@ -451,82 +452,317 @@ def detect_servers(base_dir: Path) -> list[dict]:
         })
     return servers
 
+# ================== SCREEN-BASED SERVER MANAGEMENT ==================
+
+# All server processes run inside GNU screen sessions.
+# Session name pattern: mc_<foldername>
+
+def _ensure_screen():
+    if not shutil.which("screen"):
+        raise RuntimeError("GNU screen is not installed. Install with: sudo apt-get install screen")
+
+_DEF_LOG = "screen.log"
+
+def _session_name(folder: Path) -> str:
+    return f"mc_{safe_name(folder.name)}"
+
+def _screen_ls() -> str:
+    try:
+        out = subprocess.check_output(["screen", "-ls"], stderr=subprocess.STDOUT).decode()
+    except subprocess.CalledProcessError as e:
+        out = e.output.decode() if e.output else ""
+    return out
+
+def is_running(folder: Path) -> bool:
+    name = _session_name(folder)
+    return name in _screen_ls()
+
+def start_server_screen(folder: Path, java_path: str, jar_name: str, memory: str) -> bool:
+    _ensure_screen()
+    if is_running(folder):
+        print(f"[WARN] {folder.name} already running in screen '{_session_name(folder)}'")
+        return False
+    mem = normalize_ram(memory)
+    jar_path = folder / jar_name
+    if not jar_path.exists():
+        print(f"[ERR] JAR not found: {jar_path}")
+        return False
+    logfile = folder / _DEF_LOG
+    cmd = (
+        f"cd {shlex.quote(str(folder))} && "
+        f"exec {shlex.quote(java_path)} -Xms{mem} -Xmx{mem} -jar {shlex.quote(jar_name)} nogui"
+    )
+    # Start detached screen with logging enabled
+    try:
+        subprocess.check_call([
+            "screen", "-L", "-Logfile", str(logfile), "-dmS", _session_name(folder),
+            "bash", "-lc", cmd
+        ])
+    except Exception as e:
+        print(f"[ERR] Failed to start screen session: {e}")
+        return False
+    print(f"[OK] Started '{folder.name}' in screen session '{_session_name(folder)}' (log → {logfile})")
+    print(f"Attach: screen -r {_session_name(folder)}  |  Detach: Ctrl+A, D")
+    return True
+
+def stop_server_screen(folder: Path):
+    _ensure_screen()
+    name = _session_name(folder)
+    if not is_running(folder):
+        print(f"[INFO] {folder.name} is not running.")
+        return
+    # Send 'stop' to the Minecraft console, then wait
+    send_command(folder, "stop")
+    for _ in range(20):  # wait up to ~20s
+        if not is_running(folder):
+            print(f"[OK] {folder.name} stopped.")
+            return
+        time.sleep(1)
+    # Force-quit the screen session if still alive
+    subprocess.call(["screen", "-S", name, "-X", "quit"])  # last resort
+    if not is_running(folder):
+        print(f"[WARN] Forced quit for {folder.name} (screen closed).")
+    else:
+        print(f"[ERR] Could not close session '{name}'.")
+
+def send_command(folder: Path, command: str):
+    """Send a command to the server console (adds ENTER)."""
+    _ensure_screen()
+    name = _session_name(folder)
+    if not is_running(folder):
+        print(f"[ERR] {folder.name} is not running.")
+        return
+    # screen 'stuff' needs a trailing newline (\r)
+    subprocess.call(["screen", "-S", name, "-X", "stuff", command + "\r"])
+    print(f"[OK] Sent: {command}")
+
+def tail_console(folder: Path, lines: int = 100):
+    """Show the last lines from the screen logfile (if present)."""
+    log = folder / _DEF_LOG
+    if not log.exists():
+        print(f"[INFO] No screen logfile at {log} yet. Use 'Attach console' to see live output.")
+        return
+    try:
+        data = log.read_text(encoding="utf-8", errors="ignore").splitlines()
+        for line in data[-lines:]:
+            print(line)
+    except Exception as e:
+        print(f"[ERR] Cannot read log: {e}")
+
+def attach_console(folder: Path):
+    """Attach to the live screen console (blocking until you detach with Ctrl+A, D)."""
+    _ensure_screen()
+    name = _session_name(folder)
+    if not is_running(folder):
+        print(f"[ERR] {folder.name} is not running.")
+        return
+    os.system(f"screen -r {name}")
+
+# ================== SERVERS MENU (with Screen) ==================
+
+import shlex
+
 def servers_menu(cfg: dict):
-    base_dir = Path(cfg["servers_base"]).expanduser().resolve()
-    base_dir.mkdir(parents=True, exist_ok=True)
+    base = Path(cfg["servers_base"]).expanduser().resolve()
+    base.mkdir(parents=True, exist_ok=True)
+
+    def list_servers() -> list[Path]:
+        return sorted([p for p in base.iterdir() if p.is_dir()])
+
+    def pick_server(prompt="Select server") -> Path | None:
+        servers = list_servers()
+        if not servers:
+            print("[INFO] No servers found. Create/copy one under:", base)
+            input("Press ENTER…"); return None
+        print("\n-- Available Servers --")
+        for i, sv in enumerate(servers, 1):
+            running = " (RUNNING)" if is_running(sv) else ""
+            print(f"{i}) {sv.name}{running}")
+        s = input(f"{prompt} [1-{len(servers)}] (or ENTER to cancel): ").strip()
+        if not s: return None
+        if not s.isdigit() or not (1 <= int(s) <= len(servers)):
+            print("[WARN] Invalid choice."); time.sleep(0.8); return None
+        return servers[int(s)-1]
+
+    def choose_jar(folder: Path) -> str | None:
+        jars = sorted([p.name for p in folder.glob("*.jar")])
+        if not jars:
+            print("[ERR] No .jar found in", folder); return None
+        if len(jars) == 1: return jars[0]
+        print("\n-- JARs in", folder.name, "--")
+        for i, j in enumerate(jars, 1): print(f"{i}) {j}")
+        s = input(f"Choose JAR [1-{len(jars)}] (ENTER = 1): ").strip() or "1"
+        if not s.isdigit() or not (1 <= int(s) <= len(jars)):
+            print("[WARN] Invalid choice."); return None
+        return jars[int(s)-1]
+
+    # ===== Actions =====
+    def act_build():
+        try:
+            manifest = fetch_json(MANIFEST_URL)
+            versions = manifest.get("versions", [])
+        except Exception as e:
+            print(f"[ERR] Could not fetch Mojang manifest: {e}"); input("Press ENTER…"); return True
+        sel = pick_version_interactive(versions)
+        if not sel: return True
+        try: url = get_server_jar_url(sel)
+        except Exception as e:
+            print(f"[ERR] {e}"); input("Press ENTER…"); return True
+        default_name = sel["id"]
+        name = input(f"Server name [{default_name}]: ").strip() or default_name
+        alt = input(f"Save under (blank = {base}): ").strip()
+        target_base = Path(alt).expanduser().resolve() if alt else base
+        target_base.mkdir(parents=True, exist_ok=True)
+        create_server_folder(target_base, name, sel["id"], url, cfg["java_path"], cfg["memory"])
+        input("Press ENTER…"); return True
+
+    def act_list():
+        items = detect_servers(base)
+        if not items: print("[INFO] No servers yet.")
+        else:
+            print("\n#  Name                        Version        RAM   Running  Path")
+            print("-- --------------------------- -------------- ----- -------- ------------------------------")
+            for i, s in enumerate(items, 1):
+                running = "yes" if is_running(s["path"]) else "no"
+                print(f"{i:>2} {s['name'][:27]:<27} {s['version'][:12]:<12} {s['memory'][:5]:<5} {running:<8} {s['path']}")
+        input("Press ENTER…"); return True
+
+    def act_status():
+        sv = pick_server("Check status for");  
+        if not sv: return True
+        print(f"[OK] {sv.name} is {'RUNNING' if is_running(sv) else 'STOPPED'} (session: {_session_name(sv)})")
+        input("Press ENTER…"); return True
+
+    def act_start():
+        sv = pick_server("Start which server");  
+        if not sv: return True
+        jar = choose_jar(sv);  
+        if not jar: input("Press ENTER…"); return True
+        ok = start_server_screen(sv, cfg.get("java_path","java"), jar, cfg.get("memory","4G"))
+        if ok:
+            print(f"[OK] Launched {sv.name} in screen. Attach with: screen -r {_session_name(sv)}")
+        input("Press ENTER…"); return True
+
+    def act_stop():
+        sv = pick_server("Stop which server");  
+        if not sv: return True
+        stop_server_screen(sv)
+        input("Press ENTER…"); return True
+
+    def act_restart():
+        sv = pick_server("Restart which server");  
+        if not sv: return True
+        jar = choose_jar(sv)
+        if not jar: input("Press ENTER…"); return True
+        stop_server_screen(sv); time.sleep(1.0)
+        start_server_screen(sv, cfg.get("java_path","java"), jar, cfg.get("memory","4G"))
+        print(f"[OK] Restarted {sv.name}")
+        input("Press ENTER…"); return True
+
+    def act_logs():
+        sv = pick_server("Show recent console (tail)");  
+        if not sv: return True
+        try:
+            n = int(input("How many lines? (default 100): ") or 100)
+        except: n = 100
+        tail_console(sv, n)
+        input("Press ENTER…"); return True
+
+    def act_attach():
+        sv = pick_server("Attach to console of");  
+        if not sv: return True
+        print("[INFO] Attaching… Detach with Ctrl+A, D")
+        attach_console(sv)
+        return True
+
+    def act_cmd():
+        sv = pick_server("Send command to");  
+        if not sv: return True
+        cmd = input("Command (without leading /): ").strip()
+        if not cmd: return True
+        if not cmd.startswith("/"): cmd = "/" + cmd
+        send_command(sv, cmd)
+        input("Press ENTER…"); return True
+
+    def act_backup():
+        sv = pick_server("Backup which server");  
+        if not sv: return True
+        backup_server(sv)
+        input("Press ENTER…"); return True
+
+    def act_start_all():
+        items = detect_servers(base)
+        if not items: print("[INFO] No servers to start."); input("Press ENTER…"); return True
+        for s in items:
+            sv = s["path"]
+            if is_running(sv):
+                print(f"[SKIP] {sv.name} already running"); continue
+            jar = choose_jar(sv)
+            if not jar: print(f"[SKIP] {sv.name}: no jar"); continue
+            start_server_screen(sv, cfg.get("java_path","java"), jar, cfg.get("memory","4G"))
+        input("Press ENTER…"); return True
+
+    def act_stop_all():
+        items = detect_servers(base)
+        any_running = False
+        for s in items:
+            sv = s["path"]
+            if is_running(sv): any_running = True; stop_server_screen(sv)
+        if not any_running: print("[INFO] No running servers.")
+        input("Press ENTER…"); return True
+
+    def act_change_base():
+        newp = input("New servers base directory: ").strip()
+        if newp:
+            nonlocal base
+            base = Path(newp).expanduser().resolve(); base.mkdir(parents=True, exist_ok=True)
+            cfg["servers_base"] = str(base); save_cfg(cfg)
+            print(f"[OK] Using {base}")
+        input("Press ENTER…"); return True
+
+    def act_back(): return False
+
+    actions = {
+        "1": act_build,
+        "2": act_list,      "ls": act_list,
+        "3": act_status,    "st": act_status,
+        "4": act_start,     "start": act_start,
+        "5": act_stop,      "stop": act_stop,
+        "6": act_restart,   "re": act_restart,
+        "7": act_logs,      "log": act_logs, "logs": act_logs,
+        "8": act_attach,    "attach": act_attach,
+        "9": act_cmd,       "cmd": act_cmd, "command": act_cmd,
+        "10": act_backup,   "bk": act_backup, "backup": act_backup,
+        "startall": act_start_all, "sa": act_start_all,
+        "stopall": act_stop_all,   "so": act_stop_all,
+        "base": act_change_base,
+        "0": act_back, "b": act_back, "back": act_back,
+    }
 
     while True:
         clear()
-        print("=== MCSmaker · Servers ===")
-        print(f"Base dir: {base_dir}   |   Default RAM: {cfg['memory']}   |   Java: {cfg['java_path']}")
-        print("[1] Build full server (choose Mojang version)")
-        print("[2] Show servers")
-        print("[3] Delete server")
-        print("[4] Change servers base directory")
-        print("[0] Back")
-        c = input("\nChoose: ").strip()
-
-        if c == "1":
-            try:
-                manifest = fetch_json(MANIFEST_URL)
-                versions = manifest.get("versions", [])
-            except Exception as e:
-                print(f"[ERR] Could not fetch Mojang manifest: {e}"); input("Press ENTER…"); continue
-            sel = pick_version_interactive(versions)
-            if not sel: continue
-            try: url = get_server_jar_url(sel)
-            except Exception as e:
-                print(f"[ERR] {e}"); input("Press ENTER…"); continue
-
-            default_name = sel["id"]
-            name = input(f"Server name [{default_name}]: ").strip() or default_name
-            alt = input(f"Save under (blank = {base_dir}): ").strip()
-            target_base = Path(alt).expanduser().resolve() if alt else base_dir
-            target_base.mkdir(parents=True, exist_ok=True)
-            create_server_folder(target_base, name, sel["id"], url, cfg["java_path"], cfg["memory"])
-            input("Press ENTER…")
-
-        elif c == "2":
-            items = detect_servers(base_dir)
-            if not items: print("[INFO] No servers yet.")
-            else:
-                print("\n#  Name                        Version        RAM   Path")
-                print("-- --------------------------- -------------- ----- ------------------------------")
-                for i, s in enumerate(items, 1):
-                    print(f"{i:>2} {s['name'][:27]:<27} {s['version'][:12]:<12} {s['memory'][:5]:<5} {s['path']}")
-            input("Press ENTER…")
-
-        elif c == "3":
-            items = detect_servers(base_dir)
-            if not items: print("[INFO] No servers to delete."); input("Press ENTER…"); continue
-            print("\nSelect server to delete:")
-            for i, s in enumerate(items, 1):
-                print(f"{i:>2}. {s['name']}  ({s['version']}, {s['memory']})")
-            try: idx = int(input("Which #? ")) - 1
-            except: idx = -1
-            if not (0 <= idx < len(items)): print("[WARN] Invalid."); input("Press ENTER…"); continue
-            target = items[idx]
-            yn = input(f"Type 'YES' to delete '{target['name']}' at {target['path']}: ").strip()
-            if yn != "YES":
-                print("[CANCELLED]"); input("Press ENTER…"); continue
-            shutil.rmtree(target["path"], ignore_errors=True)
-            print(f"[OK] Deleted {target['name']}")
-            input("Press ENTER…")
-
-        elif c == "4":
-            newp = input("New servers base directory: ").strip()
-            if newp:
-                base_dir = Path(newp).expanduser().resolve(); base_dir.mkdir(parents=True, exist_ok=True)
-                cfg["servers_base"] = str(base_dir); save_cfg(cfg)
-                print(f"[OK] Using {base_dir}")
-            input("Press ENTER…")
-
-        elif c == "0":
+        print("=== MCSmaker · Servers (screen) ===")
+        print(f"Base dir: {base}   |   Default RAM: {cfg['memory']}   |   Java: {cfg['java_path']}")
+        print("1) Build full server (pick Mojang version)")
+        print("2) List servers")
+        print("3) Status")
+        print("4) Start server (screen)")
+        print("5) Stop server")
+        print("6) Restart server")
+        print("7) Show recent console (tail)")
+        print("8) Attach console (screen -r)")
+        print("9) Send command to server")
+        print("10) Backup server (ZIP)")
+        print("startall) Start ALL servers")
+        print("stopall)  Stop ALL servers")
+        print("base)     Change servers base directory")
+        print("0) Back")
+        choice = input("\nChoose: ").strip().lower()
+        if not actions.get(choice, lambda: (print("[WARN] Unknown option."), time.sleep(0.6), True)[2])():
             break
-        else:
-            print("[WARN] Unknown option."); time.sleep(0.6)
 
-# ================== SETTINGS MENU ==================
+# ================== SETTINGS & MAIN ==================
+
 def settings_menu(cfg: dict):
     while True:
         clear()
@@ -554,87 +790,24 @@ def settings_menu(cfg: dict):
         elif c == "0":
             break
 
+# ---- Main menu (dispatch) ----
 
-
-# ================== SERVER MANAGEMENT EXTRA ==================
-running_servers: dict[str, subprocess.Popen] = {}
-
-def start_server(folder: Path, java_path: str, jar_name: str, memory: str):
-    """Startet einen Server-Prozess und speichert ihn im running_servers dict."""
-    mem = normalize_ram(memory)
-    jar_path = folder / jar_name
-    if not jar_path.exists():
-        print(f"[ERR] JAR not found: {jar_path}")
-        return False
-    if str(folder) in running_servers:
-        print(f"[WARN] Server {folder.name} already running!")
-        return False
-
-    print(f"[*] Starting server {folder.name} ...")
-    proc = subprocess.Popen(
-        [java_path, f"-Xms{mem}", f"-Xmx{mem}", "-jar", jar_name, "nogui"],
-        cwd=folder,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
-    )
-    running_servers[str(folder)] = proc
-    print(f"[OK] Server {folder.name} started with PID {proc.pid}")
-    return True
-
-def stop_server(folder: Path):
-    """Beendet einen laufenden Server."""
-    key = str(folder)
-    if key not in running_servers:
-        print(f"[INFO] Server {folder.name} is not running.")
-        return
-    proc = running_servers[key]
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-        print(f"[OK] Server {folder.name} stopped.")
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        print(f"[WARN] Server {folder.name} killed (timeout).")
-    del running_servers[key]
-
-def backup_server(folder: Path):
-    """Erstellt ein ZIP-Backup eines Servers."""
-    if not folder.exists():
-        print(f"[ERR] Folder {folder} not found.")
-        return
-    backup_name = f"{folder.name}_backup_{int(time.time())}"
-    backup_path = shutil.make_archive(backup_name, "zip", root_dir=folder)
-    print(f"[OK] Backup created: {backup_path}")
-
-def view_logs(folder: Path, lines: int = 20):
-    """Zeigt die letzten Zeilen der Logdatei an."""
-    log_file = folder / "logs" / "latest.log"
-    if not log_file.exists():
-        print(f"[ERR] No log file found at {log_file}")
-        return
-    with log_file.open("r", encoding="utf-8", errors="ignore") as f:
-        content = f.readlines()
-    print("".join(content[-lines:]))
-
-
-
-
-
-
-
-
-
-# ================== MAIN MENU ==================
 def main_menu():
-    # First-time environment checks
     check_and_install_dependencies()
-    # Update check
     check_for_updates(auto_prompt=True)
 
     cfg = load_cfg()
     Path(cfg["jars_dir"]).expanduser().mkdir(parents=True, exist_ok=True)
     Path(cfg["servers_base"]).expanduser().mkdir(parents=True, exist_ok=True)
+
+    def do_jars(): jars_menu(cfg); return True
+    def do_servers(): servers_menu(cfg); return True
+    def do_settings(): settings_menu(cfg); return True
+    def do_update(): self_update(); input("Press ENTER…"); return True
+    def do_exit(): print("[BYE]"); return False
+    def unknown(): print("[WARN] Unknown option."); time.sleep(0.6); return True
+
+    actions = {"1": do_jars, "2": do_servers, "3": do_settings, "u": do_update, "update": do_update, "0": do_exit, "q": do_exit, "exit": do_exit}
 
     while True:
         clear()
@@ -643,44 +816,18 @@ def main_menu():
 $$\      $$\  $$$$$$\   $$$$$$\  $$\      $$\  $$$$$$\  $$\   $$\ $$$$$$$$\ $$$$$$$\  
 $$$\    $$$ |$$  __$$\ $$  __$$\ $$$\    $$$ |$$  __$$\ $$ | $$  |$$  _____|$$  __$$\ 
 $$$$\  $$$$ |$$ /  \__|$$ /  \__|$$$$\  $$$$ |$$ /  $$ |$$ |$$  / $$ |      $$ |  $$ |
-$$\$$\$$ $$ |\$$$$$$\  $$ |      $$\$$\$$ $$ |$$$$$$$$ |$$$$$  /  $$$$$\    $$$$$$$  |
+$$\$$\$$ $$ |\$$$$$$\  $$ |      $$\\$$\\$$ $$ |$$$$$$$$ |$$$$$  /  $$$$$\    $$$$$$$  |
 $$ \$$$  $$ | \____$$\ $$ |      $$ \$$$  $$ |$$  __$$ |$$  $$<   $$  __|   $$  __$$< 
 $$ |\$  /$$ |$$\   $$ |$$ |  $$\ $$ |\$  /$$ |$$ |  $$ |$$ |\$$\  $$ |      $$ |  $$ |
 $$ | \_/ $$ |\$$$$$$  |\$$$$$$  |$$ | \_/ $$ |$$ |  $$ |$$ | \$$\ $$$$$$$$\ $$ |  $$ |
 \__|     \__| \______/  \______/ \__|     \__|\__|  \__|\__|  \__|\________|\__|  \__|
-                                                                                      
-                                                                                      
-                                                                                      
-
-
-
-
 
                  MCSMAKER — Minecraft Automation Tool by Nico19422009 · v{CURRENT_VERSION}
 """)
-
-        print("1) JARs")
-        print("2) Servers")
-        print("3) Settings")
-        print("U) Update program")
-        print("0) Exit")
-        c = input("\nChoose: ").strip().lower()
-        if c == "1":
-            jars_menu(cfg)
-        elif c == "2":
-            servers_menu(cfg)
-        elif c == "3":
-            settings_menu(cfg)
-        elif c == "u":
-            self_update()
-            input("Press ENTER…")
-        elif c == "0":
-            print("[BYE]"); break
-        else:
-            print("[WARN] Unknown option."); time.sleep(0.6)
-
-        
-
+        print("1) JARs\n2) Servers\n3) Settings\nU) Update program\n0) Exit")
+        choice = input("\nChoose: ").strip().lower()
+        if not actions.get(choice, unknown)():
+            break
 
 if __name__ == "__main__":
     try:
