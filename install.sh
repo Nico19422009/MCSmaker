@@ -1,33 +1,43 @@
 #!/bin/bash
 set -e
 
-echo "=== MCSmaker Installer ==="
+APP_NAME="MCSmaker"
+REPO_URL="https://github.com/Nico19422009/MCSmaker"
+RAW_BASE="https://raw.githubusercontent.com/Nico19422009/MCSmaker/main"
 
-# --- Update system ---
-echo "[*] Updating package list..."
-sudo apt-get update -y
+# ===== Self-update install.sh =====
+echo "[*] Updating install.sh from repo..."
+curl -fsSL "$RAW_BASE/install.sh" -o install.sh
+chmod +x install.sh
 
-# --- Install Python3 ---
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "[*] Installing Python3..."
-  sudo apt-get install -y python3 python3-pip
-else
-  echo "[OK] Python3 already installed: $(python3 --version)"
-fi
+# ===== Normal setup =====
+echo "=== $APP_NAME Installer ==="
+echo "Updating package list..."
+sudo apt update -y
 
-# --- Install Java (default-jdk) ---
-if ! command -v java >/dev/null 2>&1; then
-  echo "[*] Installing latest OpenJDK (default-jdk)..."
-  sudo apt-get install -y default-jdk
-else
-  echo "[OK] Java already installed: $(java -version 2>&1 | head -n 1)"
-fi
+# Python
+sudo apt install -y python3 python3-pip
 
+# Java (latest stable from repos)
+echo "Installing OpenJDK..."
+sudo apt install -y default-jdk
 
-echo
+# Screen
+sudo apt install -y screen
+
+# Fetch latest manager.py
+echo "Downloading latest manager.py..."
+curl -fsSL "$RAW_BASE/manager.py" -o manager.py
+
+# Create symlink for easy access
+sudo ln -sf $(pwd)/manager.py /usr/local/bin/mcsmaker
+
+# Version info
 echo "=== Installation complete! ==="
 echo "Python version: $(python3 --version)"
 echo "Java version: $(java -version 2>&1 | head -n 1)"
-
+echo "Screen version: $(screen --version)"
 echo
-echo "You can now run: python3 manager.py"
+
+echo "You can now run: mcsmaker"
+echo "Repo: $REPO_URL"
