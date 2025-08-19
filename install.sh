@@ -23,18 +23,11 @@ else
   echo "[OK] Java already installed: $(java -version 2>&1 | head -n 1)"
 fi
 
-# --- Install screen ---
-if ! command -v screen >/dev/null 2>&1; then
-  echo "[*] Installing screen..."
-  sudo apt-get install -y screen
-else
-  echo "[OK] screen already installed: $(screen --version | head -n 1)"
-fi
 
 echo
 echo "=== Installation complete! ==="
 echo "Python version: $(python3 --version)"
 echo "Java version: $(java -version 2>&1 | head -n 1)"
-echo "Screen version: $(screen --version | head -n 1)"
+
 echo
 echo "You can now run: python3 manager.py"
