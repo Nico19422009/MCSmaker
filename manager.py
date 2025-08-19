@@ -14,7 +14,7 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.4.1"  # Keep in sync with version.txt in the repo
+CURRENT_VERSION = "1.4.2"  # Keep in sync with version.txt in the repo
 
 # RAW GitHub URLs (must be raw.githubusercontent.com)
 REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/manager.py"
@@ -221,7 +221,8 @@ def warn_if_heap_too_big(mem_str: str):
 
 # ================== DEPENDENCY CHECK (apt) ==================
 REQUIRED_PKGS = [
-    "screen",
+    "python3",
+    "default-jdk",
 ]
 
 def _dpkg_installed(pkg: str) -> bool:
@@ -553,6 +554,77 @@ def settings_menu(cfg: dict):
         elif c == "0":
             break
 
+
+
+# ================== SERVER MANAGEMENT EXTRA ==================
+running_servers: dict[str, subprocess.Popen] = {}
+
+def start_server(folder: Path, java_path: str, jar_name: str, memory: str):
+    """Startet einen Server-Prozess und speichert ihn im running_servers dict."""
+    mem = normalize_ram(memory)
+    jar_path = folder / jar_name
+    if not jar_path.exists():
+        print(f"[ERR] JAR not found: {jar_path}")
+        return False
+    if str(folder) in running_servers:
+        print(f"[WARN] Server {folder.name} already running!")
+        return False
+
+    print(f"[*] Starting server {folder.name} ...")
+    proc = subprocess.Popen(
+        [java_path, f"-Xms{mem}", f"-Xmx{mem}", "-jar", jar_name, "nogui"],
+        cwd=folder,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
+    running_servers[str(folder)] = proc
+    print(f"[OK] Server {folder.name} started with PID {proc.pid}")
+    return True
+
+def stop_server(folder: Path):
+    """Beendet einen laufenden Server."""
+    key = str(folder)
+    if key not in running_servers:
+        print(f"[INFO] Server {folder.name} is not running.")
+        return
+    proc = running_servers[key]
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+        print(f"[OK] Server {folder.name} stopped.")
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        print(f"[WARN] Server {folder.name} killed (timeout).")
+    del running_servers[key]
+
+def backup_server(folder: Path):
+    """Erstellt ein ZIP-Backup eines Servers."""
+    if not folder.exists():
+        print(f"[ERR] Folder {folder} not found.")
+        return
+    backup_name = f"{folder.name}_backup_{int(time.time())}"
+    backup_path = shutil.make_archive(backup_name, "zip", root_dir=folder)
+    print(f"[OK] Backup created: {backup_path}")
+
+def view_logs(folder: Path, lines: int = 20):
+    """Zeigt die letzten Zeilen der Logdatei an."""
+    log_file = folder / "logs" / "latest.log"
+    if not log_file.exists():
+        print(f"[ERR] No log file found at {log_file}")
+        return
+    with log_file.open("r", encoding="utf-8", errors="ignore") as f:
+        content = f.readlines()
+    print("".join(content[-lines:]))
+
+
+
+
+
+
+
+
+
 # ================== MAIN MENU ==================
 def main_menu():
     # First-time environment checks
@@ -586,25 +658,9 @@ $$ | \_/ $$ |\$$$$$$  |\$$$$$$  |$$ | \_/ $$ |$$ |  $$ |$$ | \$$\ $$$$$$$$\ $$ |
 
                  MCSMAKER — Minecraft Automation Tool by Nico19422009 · v{CURRENT_VERSION}
 """)
-        print("1) JARs")
-        print("2) Servers")
-        print("3) Settings")
-        print("U) Update program")
-        print("0) Exit")
-        c = input("\nChoose: ").strip().lower()
-        if c == "1":
-            jars_menu(cfg)
-        elif c == "2":
-            servers_menu(cfg)
-        elif c == "3":
-            settings_menu(cfg)
-        elif c == "u":
-            self_update()
-            input("Press ENTER…")
-        elif c == "0":
-            print("[BYE]"); break
-        else:
-            print("[WARN] Unknown option."); time.sleep(0.6)
+
+        
+
 
 if __name__ == "__main__":
     try:
