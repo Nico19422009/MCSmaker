@@ -14,7 +14,7 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.4.0"  # Keep in sync with version.txt in the repo
+CURRENT_VERSION = "1.4.1"  # Keep in sync with version.txt in the repo
 
 # RAW GitHub URLs (must be raw.githubusercontent.com)
 REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/manager.py"
@@ -568,15 +568,17 @@ def main_menu():
         clear()
         print(rf"""
 
- <|\        /|>    /v     v\        /v     v\   <|\        /|>         <|>         <|>       /v   <|    v       <|     v\      
- / \\o    o// \   />       <\      />       <\  / \\o    o// \         / \         / >      />    < >           / \     <\     
- \o/ v\  /v \o/  _\o____         o/             \o/ v\  /v \o/       o/   \o       \o__ __o/       |            \o/     o/     
-  |   <\/>   |        \_\__o__  <|               |   <\/>   |       <|__ __|>       |__ __|        o__/_         |__  _<|      
- / \        / \             \    \\             / \        / \      /       \       |      \       |             |       \     
- \o/        \o/   \         /      \         /  \o/        \o/    o/         \o    <o>      \o    <o>           <o>       \o   
-  |          |     o       o        o       o    |          |    /v           v\    |        v\    |             |         v\  
- / \        / \    <\__ __/>        <\__ __/>   / \        / \  />             <\  / \        <\  / \  _\o__/_  / \         <\ 
-              
+$$\      $$\  $$$$$$\   $$$$$$\  $$\      $$\  $$$$$$\  $$\   $$\ $$$$$$$$\ $$$$$$$\  
+$$$\    $$$ |$$  __$$\ $$  __$$\ $$$\    $$$ |$$  __$$\ $$ | $$  |$$  _____|$$  __$$\ 
+$$$$\  $$$$ |$$ /  \__|$$ /  \__|$$$$\  $$$$ |$$ /  $$ |$$ |$$  / $$ |      $$ |  $$ |
+$$\$$\$$ $$ |\$$$$$$\  $$ |      $$\$$\$$ $$ |$$$$$$$$ |$$$$$  /  $$$$$\    $$$$$$$  |
+$$ \$$$  $$ | \____$$\ $$ |      $$ \$$$  $$ |$$  __$$ |$$  $$<   $$  __|   $$  __$$< 
+$$ |\$  /$$ |$$\   $$ |$$ |  $$\ $$ |\$  /$$ |$$ |  $$ |$$ |\$$\  $$ |      $$ |  $$ |
+$$ | \_/ $$ |\$$$$$$  |\$$$$$$  |$$ | \_/ $$ |$$ |  $$ |$$ | \$$\ $$$$$$$$\ $$ |  $$ |
+\__|     \__| \______/  \______/ \__|     \__|\__|  \__|\__|  \__|\________|\__|  \__|
+                                                                                      
+                                                                                      
+                                                                                      
 
 
 
