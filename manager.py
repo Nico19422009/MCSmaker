@@ -659,6 +659,26 @@ $$ | \_/ $$ |\$$$$$$  |\$$$$$$  |$$ | \_/ $$ |$$ |  $$ |$$ | \$$\ $$$$$$$$\ $$ |
                  MCSMAKER — Minecraft Automation Tool by Nico19422009 · v{CURRENT_VERSION}
 """)
 
+        print("1) JARs")
+        print("2) Servers")
+        print("3) Settings")
+        print("U) Update program")
+        print("0) Exit")
+        c = input("\nChoose: ").strip().lower()
+        if c == "1":
+            jars_menu(cfg)
+        elif c == "2":
+            servers_menu(cfg)
+        elif c == "3":
+            settings_menu(cfg)
+        elif c == "u":
+            self_update()
+            input("Press ENTER…")
+        elif c == "0":
+            print("[BYE]"); break
+        else:
+            print("[WARN] Unknown option."); time.sleep(0.6)
+
         
 
 
