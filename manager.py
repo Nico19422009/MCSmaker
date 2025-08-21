@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json, os, re, shutil, sys, time, urllib.request, urllib.error, subprocess
 from pathlib import Path
+import zipfile
 
 # ================== CONFIG (persisted) ==================
 CONFIG_FILE = "mcauto.json"
@@ -14,7 +15,7 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.5.1"  # Keep in sync with version.txt in the repo
+CURRENT_VERSION = "1.5.2"  # Keep in sync with version.txt in the repo
 
 # RAW GitHub URLs (must be raw.githubusercontent.com)
 REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/manager.py"
@@ -47,7 +48,7 @@ def _parse_version(s: str):
         return None
     if s.startswith("v"):
         s = s[1:]
-    parts = [int(p) for p in s.split(".")]
+    parts = [int(p) for p in s.split('.')]
     while len(parts) < 3:
         parts.append(0)
     return tuple(parts[:3])
@@ -385,13 +386,13 @@ def jars_menu(cfg: dict):
 def write_start_sh(folder: Path, jar_name: str, java_path="java", memory="4G"):
     mem = normalize_ram(memory, "4G")
     sh = f"""#!/usr/bin/env bash
-cd "$(dirname "$0")"
-{java_path} -Xms{mem} -Xmx{mem} -jar "{jar_name}" nogui
+cd \"$(dirname \"$0\")\"
+{java_path} -Xms{mem} -Xmx{mem} -jar \"{jar_name}\" nogui
 """
     write_text(folder / "start.sh", sh, 0o755)
     bat = f"""@echo off
 cd /d %~dp0
-{java_path} -Xms{mem} -Xmx{mem} -jar "{jar_name}" nogui
+{java_path} -Xms{mem} -Xmx{mem} -jar \"{jar_name}\" nogui
 pause
 """
     write_text(folder / "start.bat", bat)
@@ -557,6 +558,72 @@ def attach_console(folder: Path):
         print(f"[ERR] {folder.name} is not running.")
         return
     os.system(f"screen -r {name}")
+
+# ================== BACKUP (ZIP) ==================
+
+def backup_server(folder: Path, dest_dir: Path | None = None, include_logs: bool = False) -> Path | None:
+    """
+    Create a ZIP backup of the given server folder.
+    - If the server is running (screen), issues a save to flush world data.
+    - By default, skips the screen logfile.
+    - Backups are written to <servers_base>/backups/ by default.
+    """
+    try:
+        # Ensure folder exists
+        folder = Path(folder).resolve()
+        if not folder.exists() or not folder.is_dir():
+            print(f"[ERR] Folder not found: {folder}")
+            return None
+
+        # If running, flush world to disk
+        running = is_running(folder)
+        if running:
+            print("[*] Server is running — issuing save-all before backup …")
+            try:
+                send_command(folder, "save-off")
+                send_command(folder, "save-all flush")
+                time.sleep(3)  # give it a moment
+            except Exception as e:
+                print(f"[WARN] Couldn't send save commands: {e}")
+
+        # Prepare destination
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        dest_dir = Path(dest_dir).resolve() if dest_dir else (folder.parent / "backups")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        out_zip = dest_dir / f"{folder.name}_{ts}.zip"
+
+        # Build ZIP
+        print(f"[*] Creating backup → {out_zip}")
+        with zipfile.ZipFile(out_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            base = folder
+            for root, dirs, files in os.walk(base):
+                root_p = Path(root)
+                # Optional: skip transient dirs (none by default)
+                for fname in files:
+                    if not include_logs and fname == _DEF_LOG:
+                        continue
+                    src = root_p / fname
+                    # Skip the backup ZIP itself if backing up inside backups/
+                    if src == out_zip:
+                        continue
+                    arcname = src.relative_to(base)
+                    try:
+                        zf.write(src, arcname=str(arcname))
+                    except Exception as e:
+                        print(f"[WARN] Could not add {src}: {e}")
+
+        # Re-enable saving if we turned it off
+        if running:
+            try:
+                send_command(folder, "save-on")
+            except Exception:
+                pass
+
+        print(f"[OK] Backup completed → {out_zip}")
+        return out_zip
+    except Exception as e:
+        print(f"[ERR] Backup failed: {e}")
+        return None
 
 # ================== SERVERS MENU (with Screen) ==================
 
