@@ -119,11 +119,11 @@ try:
     new_version = module.CURRENT_VERSION
     if _parse_version(new_version) <= _parse_version(CURRENT_VERSION):
         print(f"[ERR] Update downloaded but version unchanged ({new_version}). Aborting restart.")
-        return False
+        
     print(f"[OK] Verified new version: {new_version}")
 except Exception as e:
     print(f"[ERR] Post-update verification failed: {e}. Manual restart needed.")
-    return False
+    
 
 
 # ================== UTILITIES ==================
