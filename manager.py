@@ -222,7 +222,7 @@ def _total_mem_mb_linux() -> int | None:
                     kb = int(line.split()[1]); return kb // 1024
     except Exception:
         return None
-    return None
+    
 
 def warn_if_heap_too_big(mem_str: str):
     m = re.match(r"^(\d+)([MG])$", mem_str.upper())
