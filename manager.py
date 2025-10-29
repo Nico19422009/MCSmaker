@@ -110,6 +110,22 @@ def check_for_updates(auto_prompt: bool = True, debug: bool = False) -> None:
     else:
         print(f"[OK] You are up to date (v{CURRENT_VERSION}).")
 
+# Verify update worked
+try:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("manager", str(dest))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    new_version = module.CURRENT_VERSION
+    if _parse_version(new_version) <= _parse_version(CURRENT_VERSION):
+        print(f"[ERR] Update downloaded but version unchanged ({new_version}). Aborting restart.")
+        return False
+    print(f"[OK] Verified new version: {new_version}")
+except Exception as e:
+    print(f"[ERR] Post-update verification failed: {e}. Manual restart needed.")
+    return False
+
+
 # ================== UTILITIES ==================
 
 def clear(): os.system("cls" if os.name == "nt" else "clear")
