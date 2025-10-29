@@ -2,6 +2,7 @@
 import json, os, re, shutil, sys, time, urllib.request, urllib.error, subprocess
 from pathlib import Path
 import zipfile
+import shlex  # <-- FIXED: was missing
 
 # ================== CONFIG (persisted) ==================
 CONFIG_FILE = "mcauto.json"
@@ -22,14 +23,12 @@ REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/ma
 REMOTE_VERSION_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/version.txt"
 
 # ------ Update helpers ---------
-import urllib.request, urllib.error
-
 SEMVER_RE = re.compile(r"^v?\d+(?:\.\d+){0,2}$")  # 1 / 1.2 / 1.2.3 (optional leading 'v')
 
 def _http_get(url: str, timeout: int = 10, cache_bust: bool = True) -> bytes:
     if cache_bust:
         sep = "&" if "?" in url else "?"
-        url = f"{url}{sep}_ts={int(time.time())}"  # cache buster vs CDN caching
+        url = f"{url}{sep}_ts={int(time.time())}"
     req = urllib.request.Request(
         url,
         headers={
@@ -42,7 +41,6 @@ def _http_get(url: str, timeout: int = 10, cache_bust: bool = True) -> bytes:
         return r.read()
 
 def _parse_version(s: str):
-    # robust parsing: strip BOM/CR/whitespace, allow v-prefix
     s = s.lstrip("\ufeff").strip().replace("\r", "")
     if not SEMVER_RE.match(s):
         return None
@@ -58,18 +56,37 @@ def self_update() -> bool:
     try:
         print("[*] Downloading latest manager.py …")
         data = _http_get(REMOTE_MANAGER_URL, timeout=20)
-        # Quick sanity check: should not be HTML
         if data[:1] == b"<":
             print("[ERR] Download looked like HTML (wrong URL?). Aborting.")
             return False
+
         tmp = dest.with_suffix(dest.suffix + ".new")
         with tmp.open("wb") as f:
             f.write(data)
+
+        # ---- Verify version before replacing ----
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("updated_manager", str(tmp))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            new_ver = getattr(mod, "CURRENT_VERSION", None)
+            if not new_ver or _parse_version(new_ver) <= _parse_version(CURRENT_VERSION):
+                print(f"[ERR] Downloaded file has old or same version ({new_ver}). Skipping update.")
+                tmp.unlink(missing_ok=True)
+                return False
+            print(f"[OK] Verified new version: {new_ver}")
+        except Exception as e:
+            print(f"[WARN] Could not verify new version: {e}. Proceeding anyway...")
+
+        # ---- Replace the file ----
         tmp.replace(dest)
         print("[OK] manager.py updated! Restarting…")
-        # Restart into the new file
-        os.execv(sys.executable, [sys.executable, str(dest)])
-        return True
+
+        # ---- Restart with original args ----
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+        return True  # never reached
+
     except urllib.error.HTTPError as e:
         print(f"[ERR] Update failed (HTTP {e.code}): {e.reason}")
     except urllib.error.URLError as e:
@@ -110,25 +127,11 @@ def check_for_updates(auto_prompt: bool = True, debug: bool = False) -> None:
     else:
         print(f"[OK] You are up to date (v{CURRENT_VERSION}).")
 
-# Verify update worked
-try:
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("manager", str(dest))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    new_version = module.CURRENT_VERSION
-    if _parse_version(new_version) <= _parse_version(CURRENT_VERSION):
-        print(f"[ERR] Update downloaded but version unchanged ({new_version}). Aborting restart.")
-        
-    print(f"[OK] Verified new version: {new_version}")
-except Exception as e:
-    print(f"[ERR] Post-update verification failed: {e}. Manual restart needed.")
-    
-
-
 # ================== UTILITIES ==================
 
 def clear(): os.system("cls" if os.name == "nt" else "clear")
+
+cfg: dict = {}  # will be filled in main_menu()
 
 def load_cfg() -> dict:
     if Path(CONFIG_FILE).exists():
@@ -190,6 +193,10 @@ def download_with_resume(url: str, dest: Path) -> bool:
                     print(f"\r[DL] {dest.name} {done} bytes", end="")
             print()
     except urllib.error.HTTPError as e:
+        if e.code == 416:
+            print("[INFO] Range not satisfiable — starting from scratch.")
+            part.unlink(missing_ok=True)
+            return download_with_resume(url, dest)
         print(f"[ERR] HTTP {e.code}: {e.reason}"); return False
     except urllib.error.URLError as e:
         print(f"[ERR] URL error: {e.reason}"); return False
@@ -197,19 +204,34 @@ def download_with_resume(url: str, dest: Path) -> bool:
     print(f"[OK] Saved → {dest}")
     return True
 
+# ================== JAR CACHING ==================
+
+def copy_jar_from_cache(jars_dir: Path, version_id: str, dest_folder: Path) -> Path | None:
+    safe_ver = safe_name(version_id)
+    candidates = [
+        jars_dir / f"{safe_ver}.jar",
+        jars_dir / f"server-{safe_ver}.jar",
+    ]
+    for src in candidates:
+        if src.is_file():
+            jar_name = f"server-{safe_ver}.jar"
+            dest = dest_folder / jar_name
+            print(f"[CACHE] Re-using {src.name} → {dest}")
+            shutil.copy2(src, dest)
+            return dest
+    return None
+
 # ================== RAM NORMALIZATION & HEAP SAFETY ==================
 
 def normalize_ram(value: str, fallback: str = "4G") -> str:
-    """Accepts '4G', '4GB', '4096', '4096M', '2048MB', '2 g', etc. → returns JVM-safe '4G'/'4096M'."""
     if not value: return fallback
     v = value.strip().upper().replace(" ", "")
-    v = re.sub(r"B$", "", v)  # strip optional trailing B
+    v = re.sub(r"B$", "", v)
     m = re.match(r"^(\d+)([KMG]?)$", v)
     if not m: return fallback
     num, unit = m.groups()
     if unit in ("K", "M", "G") and int(num) > 0:
         return f"{num}{unit}"
-    # No unit → assume MB if big, else GB
     n = int(num)
     if n >= 256: return f"{n}M"
     return f"{n}G"
@@ -222,7 +244,7 @@ def _total_mem_mb_linux() -> int | None:
                     kb = int(line.split()[1]); return kb // 1024
     except Exception:
         return None
-    
+    return None
 
 def warn_if_heap_too_big(mem_str: str):
     m = re.match(r"^(\d+)([MG])$", mem_str.upper())
@@ -237,7 +259,6 @@ def warn_if_heap_too_big(mem_str: str):
 REQUIRED_PKGS = [
     "python3",
     "default-jdk",
-    # screen for live console mgmt
     "screen",
 ]
 
@@ -247,24 +268,21 @@ def _dpkg_installed(pkg: str) -> bool:
 
 def check_and_install_dependencies():
     print("[*] Checking dependencies…")
-
-    # ---- Java ----
     java_path = shutil.which("java")
     if not java_path:
-        print("[WARN] No Java found on system. Installing default-jdk via apt…")
+        print("[WARN] No Java found. Installing default-jdk via apt…")
         try:
             subprocess.run(["sudo", "apt-get", "update", "-y"], check=True)
             subprocess.run(["sudo", "apt-get", "install", "-y", "default-jdk"], check=True)
             print("[OK] Java installed.")
         except Exception as e:
-            print(f"[ERR] Could not install Java automatically: {e}")
+            print(f"[ERR] Could not install Java: {e}")
             print("Please install manually: sudo apt-get install default-jdk")
     else:
         try: ver = subprocess.check_output(["java", "-version"], stderr=subprocess.STDOUT).decode().splitlines()[0]
         except Exception: ver = "(version unknown)"
         print(f"[OK] Found Java at {java_path} {ver}")
 
-    # ---- Other packages ----
     missing = [pkg for pkg in REQUIRED_PKGS if not _dpkg_installed(pkg)]
     if missing:
         print(f"[WARN] Missing packages: {', '.join(missing)}")
@@ -280,7 +298,7 @@ def check_and_install_dependencies():
 # ================== MOJANG PICKER ==================
 
 def pick_version_interactive(versions: list[dict]) -> dict | None:
-    show = versions[:30]  # latest 30
+    show = versions[:30]
     while True:
         print("\nLatest versions (newest first):")
         for i, v in enumerate(show, 1):
@@ -305,38 +323,11 @@ def get_server_jar_url(ver_obj: dict) -> str:
         raise KeyError("server.jar not available for this version")
     return dl["server"]["url"]
 
-
-
-def copy_jar_from_cache(jars_dir: Path, version_id: str, dest_folder: Path) -> Path | None:
-    """
-    Look for a cached JAR named ``<safe_version>.jar`` (or ``server-<safe_version>.jar``)
-    inside ``jars_dir``. If found → copy to ``dest_folder`` and return the new Path.
-    Returns ``None`` if nothing was found.
-    """
-    safe_ver = safe_name(version_id)
-    candidates = [
-        jars_dir / f"{safe_ver}.jar",                     # plain name (used by the old JAR menu)
-        jars_dir / f"server-{safe_ver}.jar",              # name we create ourselves
-    ]
-    for src in candidates:
-        if src.is_file():
-            jar_name = f"server-{safe_ver}.jar"
-            dest = dest_folder / jar_name
-            print(f"[CACHE] Re-using {src.name} → {dest}")
-            shutil.copy2(src, dest)
-            return dest
-    return None
-
-
-
-
 # ================== JARs MENU ==================
 
 def jars_menu(cfg: dict):
     jars_dir = Path(cfg["jars_dir"]).expanduser().resolve()
     jars_dir.mkdir(parents=True, exist_ok=True)
-
-    # optional legacy URL list
     url_cfg_path = Path("servers.json")
     url_cfg = {"servers": []}
     if url_cfg_path.exists():
@@ -440,34 +431,29 @@ pause
 
 # ================== SERVER CREATE/DISCOVER ==================
 
-def create_server_folder(base_dir: Path, server_name: str, version_id: str,
-                         jar_url: str, java_path: str, memory: str):
+def create_server_folder(base_dir: Path, server_name: str, version_id: str, jar_url: str, java_path: str, memory: str):
     folder = base_dir / safe_name(server_name)
     folder.mkdir(parents=True, exist_ok=True)
 
-    jars_dir = Path(cfg["jars_dir"]).expanduser().resolve()   # <-- use the global cfg
+    jars_dir = Path(cfg["jars_dir"]).expanduser().resolve()
     jar_name = f"server-{safe_name(version_id)}.jar"
     jar_path = folder / jar_name
 
     # ---------- 1. TRY CACHE ----------
     cached = copy_jar_from_cache(jars_dir, version_id, folder)
-    if cached:
-        # cache hit → we already have the file, just continue
-        pass
-    else:
+    if not cached:
         # ---------- 2. DOWNLOAD + SAVE TO CACHE ----------
         print(f"[*] Downloading {version_id} … (will be cached in {jars_dir})")
         tmp_path = jars_dir / f"{jar_name}.part"
         if not download_with_resume(jar_url, tmp_path):
             print("[ERR] Download failed."); return False
-        # move to final cache location (once, atomically)
         final_cache = jars_dir / jar_name
         tmp_path.replace(final_cache)
         print(f"[OK] Cached → {final_cache}")
-        # now copy into the server folder
         shutil.copy2(final_cache, jar_path)
+    else:
+        jar_path = cached
 
-    # ---------- rest of the function (eula, properties, start.sh) ----------
     write_text(folder / "eula.txt", "eula=true\n")
     props = [
         f"# Generated {int(time.time())}",
@@ -487,8 +473,6 @@ def create_server_folder(base_dir: Path, server_name: str, version_id: str,
     print(f"[DONE] Server ready at: {folder}")
     print("Start it with: ./start.sh  (Linux)  or  start.bat (Windows)")
     return True
-
-
 
 def detect_servers(base_dir: Path) -> list[dict]:
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -516,14 +500,11 @@ def detect_servers(base_dir: Path) -> list[dict]:
 
 # ================== SCREEN-BASED SERVER MANAGEMENT ==================
 
-# All server processes run inside GNU screen sessions.
-# Session name pattern: mc_<foldername>
+_DEF_LOG = "screen.log"
 
 def _ensure_screen():
     if not shutil.which("screen"):
         raise RuntimeError("GNU screen is not installed. Install with: sudo apt-get install screen")
-
-_DEF_LOG = "screen.log"
 
 def _session_name(folder: Path) -> str:
     return f"mc_{safe_name(folder.name)}"
@@ -554,7 +535,6 @@ def start_server_screen(folder: Path, java_path: str, jar_name: str, memory: str
         f"cd {shlex.quote(str(folder))} && "
         f"exec {shlex.quote(java_path)} -Xms{mem} -Xmx{mem} -jar {shlex.quote(jar_name)} nogui"
     )
-    # Start detached screen with logging enabled
     try:
         subprocess.check_call([
             "screen", "-L", "-Logfile", str(logfile), "-dmS", _session_name(folder),
@@ -573,33 +553,28 @@ def stop_server_screen(folder: Path):
     if not is_running(folder):
         print(f"[INFO] {folder.name} is not running.")
         return
-    # Send 'stop' to the Minecraft console, then wait
     send_command(folder, "stop")
-    for _ in range(20):  # wait up to ~20s
+    for _ in range(20):
         if not is_running(folder):
             print(f"[OK] {folder.name} stopped.")
             return
         time.sleep(1)
-    # Force-quit the screen session if still alive
-    subprocess.call(["screen", "-S", name, "-X", "quit"])  # last resort
+    subprocess.call(["screen", "-S", name, "-X", "quit"])
     if not is_running(folder):
         print(f"[WARN] Forced quit for {folder.name} (screen closed).")
     else:
         print(f"[ERR] Could not close session '{name}'.")
 
 def send_command(folder: Path, command: str):
-    """Send a command to the server console (adds ENTER)."""
     _ensure_screen()
     name = _session_name(folder)
     if not is_running(folder):
         print(f"[ERR] {folder.name} is not running.")
         return
-    # screen 'stuff' needs a trailing newline (\r)
     subprocess.call(["screen", "-S", name, "-X", "stuff", command + "\r"])
     print(f"[OK] Sent: {command}")
 
 def tail_console(folder: Path, lines: int = 100):
-    """Show the last lines from the screen logfile (if present)."""
     log = folder / _DEF_LOG
     if not log.exists():
         print(f"[INFO] No screen logfile at {log} yet. Use 'Attach console' to see live output.")
@@ -612,7 +587,6 @@ def tail_console(folder: Path, lines: int = 100):
         print(f"[ERR] Cannot read log: {e}")
 
 def attach_console(folder: Path):
-    """Attach to the live screen console (blocking until you detach with Ctrl+A, D)."""
     _ensure_screen()
     name = _session_name(folder)
     if not is_running(folder):
@@ -623,48 +597,36 @@ def attach_console(folder: Path):
 # ================== BACKUP (ZIP) ==================
 
 def backup_server(folder: Path, dest_dir: Path | None = None, include_logs: bool = False) -> Path | None:
-    """
-    Create a ZIP backup of the given server folder.
-    - If the server is running (screen), issues a save to flush world data.
-    - By default, skips the screen logfile.
-    - Backups are written to <servers_base>/backups/ by default.
-    """
     try:
-        # Ensure folder exists
         folder = Path(folder).resolve()
         if not folder.exists() or not folder.is_dir():
             print(f"[ERR] Folder not found: {folder}")
             return None
 
-        # If running, flush world to disk
         running = is_running(folder)
         if running:
             print("[*] Server is running — issuing save-all before backup …")
             try:
                 send_command(folder, "save-off")
                 send_command(folder, "save-all flush")
-                time.sleep(3)  # give it a moment
+                time.sleep(3)
             except Exception as e:
                 print(f"[WARN] Couldn't send save commands: {e}")
 
-        # Prepare destination
         ts = time.strftime("%Y%m%d-%H%M%S")
         dest_dir = Path(dest_dir).resolve() if dest_dir else (folder.parent / "backups")
         dest_dir.mkdir(parents=True, exist_ok=True)
         out_zip = dest_dir / f"{folder.name}_{ts}.zip"
 
-        # Build ZIP
         print(f"[*] Creating backup → {out_zip}")
         with zipfile.ZipFile(out_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             base = folder
             for root, dirs, files in os.walk(base):
                 root_p = Path(root)
-                # Optional: skip transient dirs (none by default)
                 for fname in files:
                     if not include_logs and fname == _DEF_LOG:
                         continue
                     src = root_p / fname
-                    # Skip the backup ZIP itself if backing up inside backups/
                     if src == out_zip:
                         continue
                     arcname = src.relative_to(base)
@@ -673,7 +635,6 @@ def backup_server(folder: Path, dest_dir: Path | None = None, include_logs: bool
                     except Exception as e:
                         print(f"[WARN] Could not add {src}: {e}")
 
-        # Re-enable saving if we turned it off
         if running:
             try:
                 send_command(folder, "save-on")
@@ -687,8 +648,6 @@ def backup_server(folder: Path, dest_dir: Path | None = None, include_logs: bool
         return None
 
 # ================== SERVERS MENU (with Screen) ==================
-
-import shlex
 
 def servers_menu(cfg: dict):
     base = Path(cfg["servers_base"]).expanduser().resolve()
@@ -724,7 +683,6 @@ def servers_menu(cfg: dict):
             print("[WARN] Invalid choice."); return None
         return jars[int(s)-1]
 
-    # ===== Actions =====
     def act_build():
         try:
             manifest = fetch_json(MANIFEST_URL)
@@ -756,15 +714,15 @@ def servers_menu(cfg: dict):
         input("Press ENTER…"); return True
 
     def act_status():
-        sv = pick_server("Check status for");  
+        sv = pick_server("Check status for")
         if not sv: return True
         print(f"[OK] {sv.name} is {'RUNNING' if is_running(sv) else 'STOPPED'} (session: {_session_name(sv)})")
         input("Press ENTER…"); return True
 
     def act_start():
-        sv = pick_server("Start which server");  
+        sv = pick_server("Start which server")
         if not sv: return True
-        jar = choose_jar(sv);  
+        jar = choose_jar(sv)
         if not jar: input("Press ENTER…"); return True
         ok = start_server_screen(sv, cfg.get("java_path","java"), jar, cfg.get("memory","4G"))
         if ok:
@@ -772,13 +730,13 @@ def servers_menu(cfg: dict):
         input("Press ENTER…"); return True
 
     def act_stop():
-        sv = pick_server("Stop which server");  
+        sv = pick_server("Stop which server")
         if not sv: return True
         stop_server_screen(sv)
         input("Press ENTER…"); return True
 
     def act_restart():
-        sv = pick_server("Restart which server");  
+        sv = pick_server("Restart which server")
         if not sv: return True
         jar = choose_jar(sv)
         if not jar: input("Press ENTER…"); return True
@@ -788,7 +746,7 @@ def servers_menu(cfg: dict):
         input("Press ENTER…"); return True
 
     def act_logs():
-        sv = pick_server("Show recent console (tail)");  
+        sv = pick_server("Show recent console (tail)")
         if not sv: return True
         try:
             n = int(input("How many lines? (default 100): ") or 100)
@@ -797,14 +755,14 @@ def servers_menu(cfg: dict):
         input("Press ENTER…"); return True
 
     def act_attach():
-        sv = pick_server("Attach to console of");  
+        sv = pick_server("Attach to console of")
         if not sv: return True
         print("[INFO] Attaching… Detach with Ctrl+A, D")
         attach_console(sv)
         return True
 
     def act_cmd():
-        sv = pick_server("Send command to");  
+        sv = pick_server("Send command to")
         if not sv: return True
         cmd = input("Command (without leading /): ").strip()
         if not cmd: return True
@@ -813,7 +771,7 @@ def servers_menu(cfg: dict):
         input("Press ENTER…"); return True
 
     def act_backup():
-        sv = pick_server("Backup which server");  
+        sv = pick_server("Backup which server")
         if not sv: return True
         backup_server(sv)
         input("Press ENTER…"); return True
@@ -913,17 +871,16 @@ def settings_menu(cfg: dict):
         elif c == "4":
             p = input("Default RAM (e.g., 4G or 4096M): ").strip()
             if p:
-                cfg["memory"] = normalize_ram(p, cfg["memory"])  # sanitize
+                cfg["memory"] = normalize_ram(p, cfg["memory"])
                 save_cfg(cfg)
         elif c == "0":
             break
-
-# ---- Main menu (dispatch) ----
 
 def main_menu():
     check_and_install_dependencies()
     check_for_updates(auto_prompt=True)
 
+    global cfg
     cfg = load_cfg()
     Path(cfg["jars_dir"]).expanduser().mkdir(parents=True, exist_ok=True)
     Path(cfg["servers_base"]).expanduser().mkdir(parents=True, exist_ok=True)
@@ -959,7 +916,5 @@ def main_menu():
 if __name__ == "__main__":
     try:
         main_menu()
-        global cfg
-        cfg = load_cfg()
     except KeyboardInterrupt:
         print("\n[BYE]")
