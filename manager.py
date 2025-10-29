@@ -289,6 +289,31 @@ def get_server_jar_url(ver_obj: dict) -> str:
         raise KeyError("server.jar not available for this version")
     return dl["server"]["url"]
 
+
+
+def copy_jar_from_cache(jars_dir: Path, version_id: str, dest_folder: Path) -> Path | None:
+    """
+    Look for a cached JAR named ``<safe_version>.jar`` (or ``server-<safe_version>.jar``)
+    inside ``jars_dir``. If found → copy to ``dest_folder`` and return the new Path.
+    Returns ``None`` if nothing was found.
+    """
+    safe_ver = safe_name(version_id)
+    candidates = [
+        jars_dir / f"{safe_ver}.jar",                     # plain name (used by the old JAR menu)
+        jars_dir / f"server-{safe_ver}.jar",              # name we create ourselves
+    ]
+    for src in candidates:
+        if src.is_file():
+            jar_name = f"server-{safe_ver}.jar"
+            dest = dest_folder / jar_name
+            print(f"[CACHE] Re-using {src.name} → {dest}")
+            shutil.copy2(src, dest)
+            return dest
+    return None
+
+
+
+
 # ================== JARs MENU ==================
 
 def jars_menu(cfg: dict):
@@ -399,16 +424,34 @@ pause
 
 # ================== SERVER CREATE/DISCOVER ==================
 
-def create_server_folder(base_dir: Path, server_name: str, version_id: str, jar_url: str, java_path: str, memory: str):
+def create_server_folder(base_dir: Path, server_name: str, version_id: str,
+                         jar_url: str, java_path: str, memory: str):
     folder = base_dir / safe_name(server_name)
     folder.mkdir(parents=True, exist_ok=True)
+
+    jars_dir = Path(cfg["jars_dir"]).expanduser().resolve()   # <-- use the global cfg
     jar_name = f"server-{safe_name(version_id)}.jar"
     jar_path = folder / jar_name
 
-    print(f"[*] Downloading server.jar for {version_id} → {jar_path}")
-    if not download_with_resume(jar_url, jar_path):
-        print("[ERR] Download failed."); return False
+    # ---------- 1. TRY CACHE ----------
+    cached = copy_jar_from_cache(jars_dir, version_id, folder)
+    if cached:
+        # cache hit → we already have the file, just continue
+        pass
+    else:
+        # ---------- 2. DOWNLOAD + SAVE TO CACHE ----------
+        print(f"[*] Downloading {version_id} … (will be cached in {jars_dir})")
+        tmp_path = jars_dir / f"{jar_name}.part"
+        if not download_with_resume(jar_url, tmp_path):
+            print("[ERR] Download failed."); return False
+        # move to final cache location (once, atomically)
+        final_cache = jars_dir / jar_name
+        tmp_path.replace(final_cache)
+        print(f"[OK] Cached → {final_cache}")
+        # now copy into the server folder
+        shutil.copy2(final_cache, jar_path)
 
+    # ---------- rest of the function (eula, properties, start.sh) ----------
     write_text(folder / "eula.txt", "eula=true\n")
     props = [
         f"# Generated {int(time.time())}",
@@ -428,6 +471,8 @@ def create_server_folder(base_dir: Path, server_name: str, version_id: str, jar_
     print(f"[DONE] Server ready at: {folder}")
     print("Start it with: ./start.sh  (Linux)  or  start.bat (Windows)")
     return True
+
+
 
 def detect_servers(base_dir: Path) -> list[dict]:
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -898,5 +943,7 @@ def main_menu():
 if __name__ == "__main__":
     try:
         main_menu()
+        global cfg
+        cfg = load_cfg()
     except KeyboardInterrupt:
         print("\n[BYE]")
