@@ -3,8 +3,9 @@ import json, os, re, shutil, sys, time, urllib.request, urllib.error, subprocess
 from pathlib import Path
 import zipfile
 import shlex
-import hashlib          # <-- for Forge SHA-1 (optional)
-import textwrap        # <-- pretty-print start.sh / README
+import hashlib          # for Forge SHA-1 (optional)
+import textwrap        # pretty-print start.sh / README
+import importlib.util  # for update verification
 
 # ================== CONFIG (persisted) ==================
 CONFIG_FILE = "mcauto.json"
@@ -19,28 +20,21 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.5.6"  # Keep in sync with version.txt in the repo
+CURRENT_VERSION = "1.6.0"  # Bumped for mod-support
 
-# RAW GitHub URLs
+# RAW GitHub URLs (official repo - vanilla only)
 REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/manager.py"
 REMOTE_VERSION_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/version.txt"
-
-# ------ Update helpers ---------
-SEMVER_RE = re.compile(r"^v?\d+(?:\.\d+){0,2}$")
 
 # ------------------------------------------------------------------
 #  MOD-LOADER META URLs
 # ------------------------------------------------------------------
-FABRIC_META_URL = "https://meta.fabricmc.net/v2/versions/loader/{mc_version}/{loader_version}/server/json"
-FORGE_META_URL  = "https://files.minecraftforge.net/maven/net/minecraftforge/forge/index_{mc_version}.html"
-FORGE_PROMO_URL = "https://maven.minecraftforge.net/net/minecraftforge/forge/{mc_version}-{forge_version}/forge-{mc_version}-{forge_version}-installer.jar"
+FABRIC_META_URL = "https://meta.fabricmc.net/v2/versions/loader/{mc_version}"
+FORGE_META_URL  = "https://files.minecraftforge.net/net/minecraftforge/forge/index_{mc_version}.html"
 
-FABRIC_LOADER_LATEST = "0.16.5"
-FORGE_PROMO_LATEST   = "recommended"
+# No more hardcoded loader version - dynamic now
 
-# ------------------------------------------------------------------
-#  HTTP HELPERS
-# ------------------------------------------------------------------
+# ================== HTTP HELPERS ==================
 def _http_get(url: str, timeout: int = 10, cache_bust: bool = True) -> bytes:
     if cache_bust:
         sep = "&" if "?" in url else "?"
@@ -56,10 +50,11 @@ def _http_get(url: str, timeout: int = 10, cache_bust: bool = True) -> bytes:
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
-# ------------------------------------------------------------------
-#  SELF-UPDATE
-# ------------------------------------------------------------------
+# ================== SELF-UPDATE (FIXED) ==================
+SEMVER_RE = re.compile(r"^v?\d+(?:\.\d+){0,2}$")
+
 def _parse_version(s: str):
+    if not s: return None
     s = s.lstrip("\ufeff").strip().replace("\r", "")
     if not SEMVER_RE.match(s):
         return None
@@ -83,20 +78,29 @@ def self_update() -> bool:
         with tmp.open("wb") as f:
             f.write(data)
 
-        # ---- Verify version before replacing ----
+        # ---- Verify version (SAFER) ----
+        new_ver = None
         try:
-            import importlib.util
             spec = importlib.util.spec_from_file_location("updated_manager", str(tmp))
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             new_ver = getattr(mod, "CURRENT_VERSION", None)
-            if not new_ver or _parse_version(new_ver) <= _parse_version(CURRENT_VERSION):
-                print(f"[ERR] Downloaded file has old or same version ({new_ver}). Skipping update.")
+            if not new_ver:
+                raise ValueError("No CURRENT_VERSION found")
+            cv = _parse_version(CURRENT_VERSION)
+            nv = _parse_version(new_ver)
+            if nv is None or cv is None or nv <= cv:
+                print(f"[INFO] New version {new_ver} not newer than {CURRENT_VERSION}. Skipping.")
                 tmp.unlink(missing_ok=True)
                 return False
-            print(f"[OK] Verified new version: {new_ver}")
+            print(f"[OK] Verified new version: {new_ver} > {CURRENT_VERSION}")
         except Exception as e:
-            print(f"[WARN] Could not verify new version: {e}. Proceeding anyway...")
+            print(f"[WARN] Could not verify new version ({e}). Proceeding anyway...")
+            # Use file size as proxy for "new"
+            if tmp.stat().st_size < 1000:  # Too small = invalid
+                print("[ERR] Downloaded file too small. Aborting.")
+                tmp.unlink(missing_ok=True)
+                return False
 
         # ---- Replace the file ----
         tmp.replace(dest)
@@ -140,7 +144,8 @@ def check_for_updates(auto_prompt: bool = True, debug: bool = False) -> None:
         if auto_prompt:
             ans = input("Update now? [Y/n] ").strip().lower()
             if ans in ("", "y", "yes"):
-                self_update()
+                if not self_update():
+                    print("[ERR] Update failed. Try manual download.")
         else:
             print("Tip: run 'Update program' from the menu.")
     else:
@@ -172,7 +177,7 @@ def write_text(path: Path, content: str, mode=0o644):
     except: pass
 
 def fetch_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "MCSmaker/1.4.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "MCSmaker/1.6.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.load(resp)
 
@@ -181,7 +186,7 @@ def download_with_resume(url: str, dest: Path) -> bool:
     part = dest.with_suffix(dest.suffix + ".part")
     if dest.exists():
         print(f"[SKIP] {dest.name} already exists."); return True
-    headers = {"User-Agent": "MCSmaker/1.4.0"}
+    headers = {"User-Agent": "MCSmaker/1.6.0"}
     downloaded = 0
     if part.exists():
         downloaded = part.stat().st_size
@@ -334,14 +339,11 @@ def get_server_jar_url(ver_obj: dict) -> str:
         raise KeyError("server.jar not available for this version")
     return dl["server"]["url"]
 
-# ================== MOD-LOADER HELPERS ==================
-
+# ================== MOD-LOADER HELPERS (FIXED) ==================
 def fetch_fabric_loader_json(mc_version: str) -> str | None:
     """
     Returns the direct server JAR URL for the latest stable Fabric loader.
-    No longer relies on 'launcherMeta' which is deprecated.
     """
-    # Step 1: Get list of loader versions
     loader_list_url = f"https://meta.fabricmc.net/v2/versions/loader/{mc_version}"
     try:
         loaders = fetch_json(loader_list_url)
@@ -353,20 +355,10 @@ def fetch_fabric_loader_json(mc_version: str) -> str | None:
         print(f"[ERR] No Fabric loaders found for Minecraft {mc_version}")
         return None
 
-    # Step 2: Pick the latest stable loader
-    stable_loader = None
-    for item in loaders:
-        if item.get("stable", False):
-            stable_loader = item
-            break
-    if not stable_loader:
-        stable_loader = loaders[0]  # fallback to newest
-
+    # Pick latest stable
+    stable_loader = next((item for item in loaders if item.get("stable", False)), loaders[0])
     loader_version = stable_loader["version"]
-
-    # Step 3: Get server JAR URL
-    server_url = f"https://meta.fabricmc.net/v2/versions/loader/{mc_version}/{loader_version}/server/jar"
-    return server_url
+    return f"https://meta.fabricmc.net/v2/versions/loader/{mc_version}/{loader_version}/server/jar"
 
 def fetch_forge_installer_url(mc_version: str) -> str | None:
     html = _http_get(FORGE_META_URL.format(mc_version=mc_version)).decode(errors="ignore")
@@ -376,51 +368,60 @@ def fetch_forge_installer_url(mc_version: str) -> str | None:
         return None
     return m.group(1)
 
-def install_forge(installer_jar: Path, server_dir: Path) -> bool:
-    cmd = [cfg["java_path"], "-jar", str(installer_jar), "--installServer"]
+def install_forge(installer_jar: Path, server_dir: Path, java_path: str) -> bool:
+    cmd = [java_path, "-jar", str(installer_jar), "--installServer"]
     print(f"[*] Running Forge installer …")
     try:
-        subprocess.check_call(cmd, cwd=str(server_dir))
+        result = subprocess.run(cmd, cwd=str(server_dir), capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            print(f"[ERR] Forge installer failed:\n{result.stderr}")
+            return False
         print("[OK] Forge installed.")
         return True
+    except subprocess.TimeoutExpired:
+        print("[ERR] Forge installer timed out.")
+        return False
     except Exception as e:
         print(f"[ERR] Forge installer failed: {e}")
         return False
 
-def get_mod_loader_jar(mc_version: str, loader: str, cache_dir: Path, server_dir: Path) -> Path | None:
+def get_mod_loader_jar(mc_version: str, loader: str, cache_dir: Path, server_dir: Path, java_path: str) -> Path | None:
     if loader == "vanilla":
         return None
 
+    # ---------- FABRIC ----------
     if loader == "fabric":
-        meta = fetch_fabric_loader_json(mc_version)
-        if not meta:
-            print("[ERR] Could not fetch Fabric meta.")
+        url = fetch_fabric_loader_json(mc_version)
+        if not url:
             return None
-        url = meta["launcherMeta"]["launch"]["server"]["url"]
-        dest = cache_dir / f"fabric-server-{mc_version}-{FABRIC_LOADER_LATEST}.jar"
+        dest = cache_dir / f"fabric-server-{mc_version}.jar"
         if not dest.exists():
+            print(f"[*] Downloading Fabric {mc_version} …")
             if not download_with_resume(url, dest):
                 return None
         final = server_dir / dest.name
         shutil.copy2(dest, final)
         return final
 
+    # ---------- FORGE ----------
     if loader == "forge":
         installer_url = fetch_forge_installer_url(mc_version)
         if not installer_url:
-            print("[ERR] Could not locate Forge installer.")
             return None
         installer_dest = cache_dir / f"forge-{mc_version}-installer.jar"
         if not installer_dest.exists():
+            print(f"[*] Downloading Forge installer for {mc_version} …")
             if not download_with_resume(installer_url, installer_dest):
                 return None
-        if not install_forge(installer_dest, server_dir):
+        if not install_forge(installer_dest, server_dir, java_path):
             return None
+        # Find the generated JAR
         candidates = list(server_dir.glob("forge-*.jar")) + list(server_dir.glob("*.jar"))
         for c in candidates:
-            if c.name.startswith("forge-") or c.name.endswith("-server.jar"):
+            if "forge" in c.name and c.name.endswith(".jar"):
+                print(f"[OK] Using Forge JAR: {c.name}")
                 return c
-        print("[ERR] Forge installer finished but no server JAR found.")
+        print("[ERR] Forge installed but no JAR found.")
         return None
 
     return None
@@ -432,6 +433,8 @@ def write_start_sh(folder: Path, jar_name: str, java_path: str = "java",
     extra_args = ""
     if loader == "fabric":
         extra_args = "-Dfabric.server=true"
+    elif loader == "forge":
+        extra_args = ""  # Forge handles it
 
     sh = textwrap.dedent(f"""\
         #!/usr/bin/env bash
@@ -449,10 +452,11 @@ def write_start_sh(folder: Path, jar_name: str, java_path: str = "java",
     write_text(folder / "start.bat", bat)
 
     readme = textwrap.dedent(f"""\
-        # {loader.upper()} SERVER
+        # {loader.upper()} SERVER SETUP
         JAR: {jar_name}
         RAM: {mem}
-        Put your mods into the folder `mods/` (create it if missing).
+        Mods: Drop .jar files into `./mods/` (auto-created).
+        Start: `./start.sh` (Linux) or `start.bat` (Windows)
         """)
     write_text(folder / "README.txt", readme)
 
@@ -468,6 +472,7 @@ def create_server_folder(base_dir: Path, server_name: str, version_id: str,
     mods_dir.mkdir(exist_ok=True)
 
     # ---- 1. Get the executable JAR ----
+    jar_path = None
     if loader == "vanilla":
         jar_name = f"server-{safe_name(version_id)}.jar"
         jar_path = folder / jar_name
@@ -482,8 +487,9 @@ def create_server_folder(base_dir: Path, server_name: str, version_id: str,
             shutil.copy2(final_cache, jar_path)
         else:
             jar_path = cached
+        jar_name = jar_path.name
     else:
-        final_jar = get_mod_loader_jar(version_id, loader, jars_dir, folder)
+        final_jar = get_mod_loader_jar(version_id, loader, jars_dir, folder, java_path)
         if not final_jar:
             return False
         jar_name = final_jar.name
@@ -518,8 +524,8 @@ def create_server_folder(base_dir: Path, server_name: str, version_id: str,
     }
     write_text(meta, json.dumps(meta_data, indent=2))
 
-    print(f"[DONE] Server ready at: {folder}")
-    print("   Mods to ./mods/   |   Start to ./start.sh   (or start.bat)")
+    print(f"[DONE] {loader.upper()} server '{server_name}' ready at: {folder}")
+    print("   📦 Mods → ./mods/   |   ▶️  Start → ./start.sh   (or start.bat)")
     return True
 
 # ================== SERVER META READER ==================
@@ -530,17 +536,17 @@ def read_server_meta(folder: Path) -> dict:
             return json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
             pass
-    # fallback – guess from start.sh
+    # Fallback from start.sh
     start = folder / "start.sh"
     if start.exists():
-        txt = start.read_text(encoding="utf-8")
-        jar = re.search(r'-jar\s+"?([^"\n]+)"?', txt)
-        mem = re.search(r"-Xmx(\S+)", txt)
+        txt = start.read_text(encoding="utf-8", errors="ignore")
+        jar_match = re.search(r'-jar\s+"?([^"\n]+)"?', txt)
+        mem_match = re.search(r"-Xmx(\S+)", txt)
         return {
             "mc_version": "?",
             "loader": "vanilla",
-            "jar": jar.group(1) if jar else "?",
-            "memory": mem.group(1) if mem else "?"
+            "jar": jar_match.group(1) if jar_match else "?",
+            "memory": mem_match.group(1) if mem_match else "?"
         }
     return {}
 
@@ -549,11 +555,8 @@ def detect_servers(base_dir: Path) -> list[dict]:
     base_dir.mkdir(parents=True, exist_ok=True)
     servers = []
     for p in sorted(base_dir.iterdir()):
-        if not p.is_dir(): continue
-        if not (p / "start.sh").exists(): continue
-        start_txt = ""
-        try: start_txt = (p / "start.sh").read_text(encoding="utf-8")
-        except: pass
+        if not p.is_dir() or not (p / "start.sh").exists(): continue
+        start_txt = p.joinpath("start.sh").read_text(encoding="utf-8", errors="ignore")
         mem = re.search(r"-Xmx(\S+)", start_txt)
         jar = re.search(r'-jar\s+"?([^"\n]+)"?', start_txt)
         ver = "?"
@@ -616,7 +619,7 @@ def start_server_screen(folder: Path, java_path: str, jar_name: str, memory: str
     except Exception as e:
         print(f"[ERR] Failed to start screen session: {e}")
         return False
-    print(f"[OK] Started '{folder.name}' in screen session '{_session_name(folder)}' (log to {logfile})")
+    print(f"[OK] Started '{folder.name}' in screen '{_session_name(folder)}' (log → {logfile})")
     print(f"Attach: screen -r {_session_name(folder)}  |  Detach: Ctrl+A, D")
     return True
 
@@ -634,9 +637,9 @@ def stop_server_screen(folder: Path):
         time.sleep(1)
     subprocess.call(["screen", "-S", name, "-X", "quit"])
     if not is_running(folder):
-        print(f"[WARN] Forced quit for {folder.name} (screen closed).")
+        print(f"[WARN] Forced quit for {folder.name}.")
     else:
-        print(f"[ERR] Could not close session '{name}'.")
+        print(f"[ERR] Could not close '{name}'.")
 
 def send_command(folder: Path, command: str):
     _ensure_screen()
@@ -650,20 +653,20 @@ def send_command(folder: Path, command: str):
 def tail_console(folder: Path, lines: int = 100):
     log = folder / _DEF_LOG
     if not log.exists():
-        print(f"[INFO] No screen logfile at {log} yet. Use 'Attach console' to see live output.")
+        print(f"[INFO] No log at {log}. Use 'Attach' for live.")
         return
     try:
         data = log.read_text(encoding="utf-8", errors="ignore").splitlines()
         for line in data[-lines:]:
             print(line)
     except Exception as e:
-        print(f"[ERR] Cannot read log: {e}")
+        print(f"[ERR] Log read failed: {e}")
 
 def attach_console(folder: Path):
     _ensure_screen()
     name = _session_name(folder)
     if not is_running(folder):
-        print(f"[ERR] {folder.name} is not running.")
+        print(f"[ERR] {folder.name} not running.")
         return
     os.system(f"screen -r {name}")
 
@@ -677,141 +680,226 @@ def backup_server(folder: Path, dest_dir: Path | None = None, include_logs: bool
 
         running = is_running(folder)
         if running:
-            print("[*] Server is running — issuing save-all before backup …")
-            try:
-                send_command(folder, "save-off")
-                send_command(folder, "save-all flush")
-                time.sleep(3)
-            except Exception as e:
-                print(f"[WARN] Couldn't send save commands: {e}")
+            print("[*] Running server — save-all before backup…")
+            send_command(folder, "save-off")
+            send_command(folder, "save-all flush")
+            time.sleep(3)
 
         ts = time.strftime("%Y%m%d-%H%M%S")
         dest_dir = Path(dest_dir).resolve() if dest_dir else (folder.parent / "backups")
         dest_dir.mkdir(parents=True, exist_ok=True)
         out_zip = dest_dir / f"{folder.name}_{ts}.zip"
 
-        print(f"[*] Creating backup to {out_zip}")
+        print(f"[*] Backing up to {out_zip}")
         with zipfile.ZipFile(out_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            base = folder
-            for root, dirs, files in os.walk(base):
+            for root, dirs, files in os.walk(folder):
                 root_p = Path(root)
                 for fname in files:
-                    if not include_logs and fname == _DEF_LOG:
-                        continue
+                    if not include_logs and fname == _DEF_LOG: continue
                     src = root_p / fname
-                    if src == out_zip:
-                        continue
-                    arcname = src.relative_to(base)
-                    try:
-                        zf.write(src, arcname=str(arcname))
-                    except Exception as e:
-                        print(f"[WARN] Could not add {src}: {e}")
+                    arcname = src.relative_to(folder)
+                    zf.write(src, arcname=str(arcname))
 
         if running:
-            try:
-                send_command(folder, "save-on")
-            except Exception:
-                pass
+            send_command(folder, "save-on")
 
-        print(f"[OK] Backup completed to {out_zip}")
+        print(f"[OK] Backup done: {out_zip}")
         return out_zip
     except Exception as e:
         print(f"[ERR] Backup failed: {e}")
         return None
 
-# ================== HELPER: pick server ==================
+# ================== PICK SERVER HELPER ==================
 def servers_menu_pick_server(base: Path, prompt: str = "Select server") -> Path | None:
     servers = sorted([p for p in base.iterdir() if p.is_dir() and (p / "start.sh").exists()])
     if not servers:
-        print("[INFO] No servers found.")
+        print(f"[INFO] No servers in {base}. Create one!")
         input("Press ENTER…")
         return None
-    print("\n-- Available Servers --")
+    print("\n-- Servers --")
     for i, sv in enumerate(servers, 1):
         running = " (RUNNING)" if is_running(sv) else ""
-        print(f"{i}) {sv.name}{running}")
-    s = input(f"{prompt} [1-{len(servers)}] (ENTER = cancel): ").strip()
+        print(f"{i:>2}. {sv.name}{running}")
+    s = input(f"{prompt} [1-{len(servers)}] (ENTER=cancel): ").strip()
     if not s: return None
-    if not s.isdigit() or not (1 <= int(s) <= len(servers)):
-        print("[WARN] Invalid choice.")
-        time.sleep(0.8)
-        return None
-    return servers[int(s)-1]
+    try:
+        idx = int(s) - 1
+        if 0 <= idx < len(servers): return servers[idx]
+    except ValueError:
+        pass
+    print("[WARN] Bad choice.")
+    time.sleep(0.8)
+    return None
 
 # ================== MODS MENU ==================
-def mods_menu(cfg: dict):
-    base = Path(cfg["servers_base"]).expanduser().resolve()
-
-    def pick_server() -> Path | None:
-        return servers_menu_pick_server(base, prompt="This Function is currently under develeopment." )
+def jars_menu(cfg: dict):
+    jars_dir = Path(cfg["jars_dir"]).expanduser().resolve()
+    jars_dir.mkdir(parents=True, exist_ok=True)
+    url_cfg_path = Path("servers.json")
+    url_cfg = {"servers": []}
+    if url_cfg_path.exists():
+        try: url_cfg = json.loads(url_cfg_path.read_text(encoding="utf-8"))
+        except: pass
 
     while True:
         clear()
-        print("Currently this function is under development. Sorry :(\n")
+        print("=== MCSmaker · JARs ===")
+        print(f"JARs dir: {jars_dir}")
+        print("[1] Download JAR from Mojang")
+        print("[2] Download & save to servers.json")
+        print("[3] Show local JARs")
+        print("[4] Change JARs dir")
+        print("[5] Download ONE from servers.json")
+        print("[6] Download ALL from servers.json")
+        print("[0] Back")
+        c = input("\nChoose: ").strip()
+
+
+
+
+
+
+
+        if c in ("1", "2"):
+            try:
+                manifest = fetch_json(MANIFEST_URL)
+                versions = manifest.get("versions", [])
+            except Exception as e:
+                print(f"[ERR] Fetch failed: {e}"); input("ENTER…"); continue
+            sel = pick_version_interactive(versions)
+            if not sel: continue
+            try: url = get_server_jar_url(sel)
+            except Exception as e:
+                print(f"[ERR] {e}"); input("ENTER…"); continue
+            name = safe_name(sel["id"])
+            dest = jars_dir / f"{name}.jar"
+            if download_with_resume(url, dest) and c == "2":
+                url_cfg["servers"].append({"name": sel["id"], "url": url})
+                url_cfg_path.write_text(json.dumps(url_cfg, indent=2))
+                print(f"[OK] Added to servers.json")
+            input("ENTER…")
+
+        elif c == "3":
+            files = [p.name for p in jars_dir.glob("*.jar")]
+            if not files: print("[INFO] No JARs.")
+            else: print("\nJARs:\n" + "\n".join(f" - {f}" for f in sorted(files)))
+            input("ENTER…")
+
+        elif c == "4":
+            newp = input("New JARs dir: ").strip()
+            if newp:
+                jars_dir = Path(newp).expanduser().resolve()
+                jars_dir.mkdir(parents=True, exist_ok=True)
+                cfg["jars_dir"] = str(jars_dir)
+                save_cfg(cfg)
+                print(f"[OK] Now using {jars_dir}")
+            input("ENTER…")
+
+        elif c == "5":
+            servers = url_cfg.get("servers", [])
+            if not servers: print("[INFO] servers.json empty."); input("ENTER…"); continue
+            for i, s in enumerate(servers, 1):
+                print(f"{i:>2}. {s.get('name','?')} → {s.get('url','')[:50]}...")
+            try: idx = int(input("Which? ")) - 1
+            except: idx = -1
+            if 0 <= idx < len(servers):
+                name = safe_name(servers[idx].get("name") or f"server_{idx+1}")
+                url = servers[idx].get("url")
+                if url:
+                    dest = jars_dir / f"{name}.jar"
+                    download_with_resume(url, dest)
+            input("ENTER…")
+
+        elif c == "6":
+            for i, s in enumerate(url_cfg.get("servers", []), 1):
+                name = safe_name(s.get("name") or f"server_{i}")
+                url = s.get("url")
+                if url:
+                    dest = jars_dir / f"{name}.jar"
+                    download_with_resume(url, dest)
+            input("ENTER…")
+
+        elif c == "0":
+            break
+        else:
+            print("[WARN] Unknown."); time.sleep(0.6)
+
+def mods_menu(cfg: dict):
+    base = Path(cfg["servers_base"]).expanduser().resolve()
+
+    while True:
+        clear()
+        print("=== MCSmaker · Mods ===")
+        print("1) List mods in server")
+        print("2) Add mod (URL download)")
+        print("3) Delete mod")
+        print("4) Download Fabric server JAR")
+        print("5) Download Forge installer")
         print("0) Back")
         c = input("\nChoose: ").strip()
 
         if c == "1":
-            sv = pick_server()
-            if not sv: continue
-            mods = sorted((sv / "mods").glob("*.jar"))
-            if not mods:
-                print("[INFO] No mods installed.")
-            else:
-                print("\nMods:")
-                for m in mods:
-                    print(f"  - {m.name}")
-            input("\nPress ENTER…")
-
-        elif c == "2":
-            sv = pick_server()
-            if not sv: continue
-            url = input("Mod JAR URL: ").strip()
-            if not url: continue
-            dest = (sv / "mods") / Path(url).name
-            download_with_resume(url, dest)
-            input("Press ENTER…")
-
-        elif c == "3":
-            sv = pick_server()
+            sv = servers_menu_pick_server(base, "Pick server")
             if not sv: continue
             mods = list((sv / "mods").glob("*.jar"))
             if not mods:
-                print("[INFO] No mods to delete.")
-                input("Press ENTER…"); continue
-            print("\nSelect mod to delete:")
+                print("[INFO] No mods in ./mods/")
+            else:
+                print("\nMods:")
+                for m in sorted(mods, key=lambda x: x.name):
+                    print(f"  - {m.name} ({m.stat().st_size / 1024:.1f} KB)")
+            input("\nENTER…")
+
+        elif c == "2":
+            sv = servers_menu_pick_server(base, "Pick server")
+            if not sv: continue
+            url = input("Mod JAR URL (e.g. from CurseForge): ").strip()
+            if not url: continue
+            dest = (sv / "mods") / Path(url).with_suffix('.jar').name  # Clean name
+            if download_with_resume(url, dest):
+                print(f"[OK] Added {dest.name} to {sv.name}/mods/")
+            input("ENTER…")
+
+        elif c == "3":
+            sv = servers_menu_pick_server(base, "Pick server")
+            if not sv: continue
+            mods = list((sv / "mods").glob("*.jar"))
+            if not mods:
+                print("[INFO] No mods to delete."); input("ENTER…"); continue
+            print("\nDelete which?")
             for i, m in enumerate(mods, 1):
-                print(f"{i}) {m.name}")
-            idx = input("Number (or ENTER to cancel): ").strip()
-            if not idx.isdigit(): continue
-            idx = int(idx) - 1
+                print(f"{i:>2}. {m.name}")
+            idx_str = input("Number (ENTER=cancel): ").strip()
+            if not idx_str.isdigit(): continue
+            idx = int(idx_str) - 1
             if 0 <= idx < len(mods):
                 mods[idx].unlink()
                 print(f"[OK] Deleted {mods[idx].name}")
-            input("Press ENTER…")
+            input("ENTER…")
 
         elif c == "4":
-            mc = input("Minecraft version for Fabric (e.g. 1.21.1): ").strip()
+            mc = input("Minecraft version (e.g. 1.21.1): ").strip()
             if not mc: continue
-            meta = fetch_fabric_loader_json(mc)
-            if not meta:
-                print("[ERR] Could not fetch Fabric meta.")
-                input("Press ENTER…"); continue
-            url = meta["launcherMeta"]["launch"]["server"]["url"]
-            dest = Path(cfg["jars_dir"]).expanduser().resolve() / f"fabric-server-{mc}-{FABRIC_LOADER_LATEST}.jar"
-            download_with_resume(url, dest)
-            input("Press ENTER…")
+            url = fetch_fabric_loader_json(mc)
+            if not url:
+                print("[ERR] Fabric fetch failed.")
+                input("ENTER…"); continue
+            dest = Path(cfg["jars_dir"]).expanduser().resolve() / f"fabric-server-{mc}.jar"
+            if download_with_resume(url, dest):
+                print(f"[OK] Fabric JAR cached: {dest.name}")
+            input("ENTER…")
 
         elif c == "5":
-            mc = input("Minecraft version for Forge (e.g. 1.21.1): ").strip()
+            mc = input("Minecraft version (e.g. 1.21.1): ").strip()
             if not mc: continue
             url = fetch_forge_installer_url(mc)
             if not url:
-                print("[ERR] Could not locate Forge installer.")
-                input("Press ENTER…"); continue
+                print("[ERR] Forge fetch failed.")
+                input("ENTER…"); continue
             dest = Path(cfg["jars_dir"]).expanduser().resolve() / f"forge-{mc}-installer.jar"
-            download_with_resume(url, dest)
-            input("Press ENTER…")
+            if download_with_resume(url, dest):
+                print(f"[OK] Forge installer cached: {dest.name}")
+            input("ENTER…")
 
         elif c == "0":
             break
@@ -825,255 +913,256 @@ def servers_menu(cfg: dict):
         return servers_menu_pick_server(base, prompt)
 
     def choose_jar(folder: Path) -> str | None:
-        jars = sorted([p.name for p in folder.glob("*.jar")])
-        if not jars:
-            print("[ERR] No .jar found in", folder); return None
+        jars = sorted(p.name for p in folder.glob("*.jar"))
+        if not jars: print(f"[ERR] No JARs in {folder}"); return None
         if len(jars) == 1: return jars[0]
-        print("\n-- JARs in", folder.name, "--")
+        print(f"\nJARs in {folder.name}:")
         for i, j in enumerate(jars, 1): print(f"{i}) {j}")
-        s = input(f"Choose JAR [1-{len(jars)}] (ENTER = 1): ").strip() or "1"
-        if not s.isdigit() or not (1 <= int(s) <= len(jars)):
-            print("[WARN] Invalid choice."); return None
-        return jars[int(s)-1]
+        s = input(f"Pick [1-{len(jars)}] (ENTER=1): ").strip() or "1"
+        try:
+            idx = int(s) - 1
+            if 0 <= idx < len(jars): return jars[idx]
+        except ValueError:
+            pass
+        print("[WARN] Bad choice."); return None
 
     def act_build():
         try:
             manifest = fetch_json(MANIFEST_URL)
             versions = manifest.get("versions", [])
         except Exception as e:
-            print(f"[ERR] Could not fetch Mojang manifest: {e}"); input("Press ENTER…"); return True
+            print(f"[ERR] Manifest fetch failed: {e}"); input("ENTER…"); return True
+
         sel = pick_version_interactive(versions)
         if not sel: return True
 
-        print("\nSelect mod loader:")
-        print("1) Vanilla")
-        print("2) Fabric")
-        print("3) Forge")
-        ld = input("Choice [1-3] (default = 1): ").strip() or "1"
-        loader = {"1":"vanilla","2":"fabric","3":"forge"}.get(ld, "vanilla")
+        print("\nMod loader:")
+        print("1) Vanilla  2) Fabric  3) Forge")
+        ld = input("Choice [1-3] (1=vanilla): ").strip() or "1"
+        loader_map = {"1": "vanilla", "2": "fabric", "3": "forge"}
+        loader = loader_map.get(ld, "vanilla")
 
         jar_url = None
         if loader == "vanilla":
             try:
                 jar_url = get_server_jar_url(sel)
             except Exception as e:
-                print(f"[ERR] {e}")
-                input("Press ENTER…")
-                return True
+                print(f"[ERR] Vanilla URL failed: {e}"); input("ENTER…"); return True
 
-        default_name = sel["id"]
-        name = input(f"Server name [{default_name}]: ").strip() or default_name
-        alt = input(f"Save under (blank = {base}): ").strip()
+        name = input(f"Server name [{sel['id']}]: ").strip() or sel["id"]
+        alt = input(f"Base dir (blank={base}): ").strip()
         target_base = Path(alt).expanduser().resolve() if alt else base
         target_base.mkdir(parents=True, exist_ok=True)
 
-        ok = create_server_folder(
-            target_base, name, sel["id"], jar_url,
-            cfg["java_path"], cfg["memory"], loader=loader
-        )
-        if ok:
-            print("[OK] Server created – you can now drop mods into the `mods/` folder.")
-        input("Press ENTER…"); return True
+        success = create_server_folder(target_base, name, sel["id"], jar_url, cfg["java_path"], cfg["memory"], loader)
+        if success:
+            print(f"[OK] {loader.upper()} server created! Add mods to ./mods/")
+        input("ENTER…"); return True
 
     def act_list():
         items = detect_servers(base)
-        if not items: print("[INFO] No servers yet.")
-        else:
-            print("\n#  Name                        Loader   Version        RAM   Running  Path")
-            print("-- --------------------------- -------- -------------- ----- -------- ------------------------------")
-            for i, s in enumerate(items, 1):
-                running = "yes" if is_running(s["path"]) else "no"
-                loader = s.get("loader", "vanilla")
-                print(f"{i:>2} {s['name'][:27]:<27} {loader[:8]:<8} {s['version'][:12]:<12} {s['memory'][:5]:<5} {running:<8} {s['path']}")
-        input("Press ENTER…"); return True
+        if not items: print("[INFO] No servers."); input("ENTER…"); return True
+        print("\n# Name                          Loader  Ver         RAM  Run  Path")
+        print("-- ----------------------------- ------ ----------- ---- ---- ----------------")
+        for i, s in enumerate(items, 1):
+            running = "yes" if is_running(s["path"]) else "no"
+            print(f"{i:>2} {s['name'][:29]:<29} {s['loader'][:6]:<6} {s['version'][:11]:<11} {s['memory'][:4]:<4} {running:<4} {s['path']}")
+        input("ENTER…"); return True
 
     def act_status():
-        sv = pick_server("Check status for")
+        sv = pick_server("Status for")
         if not sv: return True
-        print(f"[OK] {sv.name} is {'RUNNING' if is_running(sv) else 'STOPPED'} (session: {_session_name(sv)})")
-        input("Press ENTER…"); return True
+        status = "RUNNING" if is_running(sv) else "STOPPED"
+        print(f"[OK] {sv.name}: {status} (session: {_session_name(sv)})")
+        input("ENTER…"); return True
 
     def act_start():
-        sv = pick_server("Start which server")
+        sv = pick_server("Start")
         if not sv: return True
         meta = read_server_meta(sv)
         jar = meta.get("jar")
         if not jar or not (sv / jar).exists():
-            print("[ERR] JAR not found – pick manually.")
+            print("[WARN] Meta JAR missing — pick one.")
             jar = choose_jar(sv)
-        if not jar: input("Press ENTER…"); return True
-        ok = start_server_screen(sv, cfg.get("java_path","java"), jar, meta.get("memory", cfg.get("memory","4G")))
-        if ok:
-            print(f"[OK] Launched {sv.name} in screen. Attach with: screen -r {_session_name(sv)}")
-        input("Press ENTER…"); return True
+        if not jar: input("ENTER…"); return True
+        mem = meta.get("memory", cfg["memory"])
+        if start_server_screen(sv, cfg["java_path"], jar, mem):
+            print(f"[OK] {sv.name} started. Attach: screen -r {_session_name(sv)}")
+        input("ENTER…"); return True
 
     def act_stop():
-        sv = pick_server("Stop which server")
+        sv = pick_server("Stop")
         if not sv: return True
         stop_server_screen(sv)
-        input("Press ENTER…"); return True
+        input("ENTER…"); return True
 
     def act_restart():
-        sv = pick_server("Restart which server")
+        sv = pick_server("Restart")
         if not sv: return True
         meta = read_server_meta(sv)
         jar = meta.get("jar")
         if not jar or not (sv / jar).exists():
             jar = choose_jar(sv)
-        if not jar: input("Press ENTER…"); return True
-        stop_server_screen(sv); time.sleep(1.0)
-        start_server_screen(sv, cfg.get("java_path","java"), jar, meta.get("memory", cfg.get("memory","4G")))
-        print(f"[OK] Restarted {sv.name}")
-        input("Press ENTER…"); return True
+        if not jar: input("ENTER…"); return True
+        mem = meta.get("memory", cfg["memory"])
+        stop_server_screen(sv)
+        time.sleep(2)
+        start_server_screen(sv, cfg["java_path"], jar, mem)
+        print(f"[OK] {sv.name} restarted.")
+        input("ENTER…"); return True
 
     def act_logs():
-        sv = pick_server("Show recent console (tail)")
+        sv = pick_server("Tail logs for")
         if not sv: return True
-        try:
-            n = int(input("How many lines? (default 100): ") or 100)
-        except: n = 100
-        tail_console(sv, n)
-        input("Press ENTER…"); return True
+        n = input("Lines (default 100): ").strip()
+        try: lines = int(n) if n else 100
+        except: lines = 100
+        tail_console(sv, lines)
+        input("ENTER…"); return True
 
     def act_attach():
-        sv = pick_server("Attach to console of")
+        sv = pick_server("Attach to")
         if not sv: return True
-        print("[INFO] Attaching… Detach with Ctrl+A, D")
+        print("Detach: Ctrl+A, D")
         attach_console(sv)
-        return True
+        return True  # Doesn't return normally
 
     def act_cmd():
-        sv = pick_server("Send command to")
+        sv = pick_server("Command to")
         if not sv: return True
-        cmd = input("Command (without leading /): ").strip()
+        cmd = input("Command: ").strip()
         if not cmd: return True
         if not cmd.startswith("/"): cmd = "/" + cmd
         send_command(sv, cmd)
-        input("Press ENTER…"); return True
+        input("ENTER…"); return True
 
     def act_backup():
-        sv = pick_server("Backup which server")
+        sv = pick_server("Backup")
         if not sv: return True
         backup_server(sv)
-        input("Press ENTER…"); return True
+        input("ENTER…"); return True
 
     def act_start_all():
         items = detect_servers(base)
-        if not items: print("[INFO] No servers to start."); input("Press ENTER…"); return True
+        if not items: print("[INFO] Nothing to start."); input("ENTER…"); return True
         for s in items:
             sv = s["path"]
-            if is_running(sv):
-                print(f"[SKIP] {sv.name} already running"); continue
+            if is_running(sv): print(f"[SKIP] {sv.name} running"); continue
             meta = read_server_meta(sv)
-            jar = meta.get("jar")
-            if not jar or not (sv / jar).exists():
-                jar = choose_jar(sv)
-            if not jar: print(f"[SKIP] {sv.name}: no jar"); continue
-            start_server_screen(sv, cfg.get("java_path","java"), jar, meta.get("memory", cfg.get("memory","4G")))
-        input("Press ENTER…"); return True
+            jar = meta.get("jar") or choose_jar(sv)
+            if not jar: print(f"[SKIP] {sv.name}: no JAR"); continue
+            mem = meta.get("memory", cfg["memory"])
+            start_server_screen(sv, cfg["java_path"], jar, mem)
+        input("ENTER…"); return True
 
     def act_stop_all():
         items = detect_servers(base)
-        any_running = False
+        stopped = 0
         for s in items:
-            sv = s["path"]
-            if is_running(sv): any_running = True; stop_server_screen(sv)
-        if not any_running: print("[INFO] No running servers.")
-        input("Press ENTER…"); return True
+            if is_running(s["path"]): stop_server_screen(s["path"]); stopped += 1
+        print(f"[OK] Stopped {stopped} servers." if stopped else "[INFO] None running.")
+        input("ENTER…"); return True
 
-    def act_change_base():
-        newp = input("New servers base directory: ").strip()
+    def act_base():
+        newp = input("New base dir: ").strip()
         if newp:
             nonlocal base
-            base = Path(newp).expanduser().resolve(); base.mkdir(parents=True, exist_ok=True)
-            cfg["servers_base"] = str(base); save_cfg(cfg)
-            print(f"[OK] Using {base}")
-        input("Press ENTER…"); return True
+            base = Path(newp).expanduser().resolve()
+            base.mkdir(parents=True, exist_ok=True)
+            cfg["servers_base"] = str(base)
+            save_cfg(cfg)
+            print(f"[OK] Base now {base}")
+        input("ENTER…"); return True
 
     def act_back(): return False
 
     actions = {
-        "1": act_build,
-        "2": act_list,      "ls": act_list,
-        "3": act_status,    "st": act_status,
-        "4": act_start,     "start": act_start,
-        "5": act_stop,      "stop": act_stop,
-        "6": act_restart,   "re": act_restart,
-        "7": act_logs,      "log": act_logs, "logs": act_logs,
-        "8": act_attach,    "attach": act_attach,
-        "9": act_cmd,       "cmd": act_cmd, "command": act_cmd,
-        "10": act_backup,   "bk": act_backup, "backup": act_backup,
-        "startall": act_start_all, "sa": act_start_all,
-        "stopall": act_stop_all,   "so": act_stop_all,
-        "base": act_change_base,
-        "0": act_back, "b": act_back, "back": act_back,
+        "1": act_build, "build": act_build,
+        "2": act_list, "ls": act_list,
+        "3": act_status, "st": act_status,
+        "4": act_start, "start": act_start,
+        "5": act_stop, "stop": act_stop,
+        "6": act_restart, "re": act_restart,
+        "7": act_logs, "log": act_logs,
+        "8": act_attach, "attach": act_attach,
+        "9": act_cmd, "cmd": act_cmd,
+        "10": act_backup, "bk": act_backup,
+        "sa": act_start_all, "startall": act_start_all,
+        "so": act_stop_all, "stopall": act_stop_all,
+        "base": act_base,
+        "0": act_back, "b": act_back, "back": act_back
     }
 
     while True:
         clear()
-        print("=== MCSmaker · Servers (screen) ===")
-        print(f"Base dir: {base}   |   Default RAM: {cfg['memory']}   |   Java: {cfg['java_path']}")
-        print("1) Build full server (pick Mojang version)")
-        print("2) List servers")
-        print("3) Status")
-        print("4) Start server (screen)")
-        print("5) Stop server")
-        print("6) Restart server")
-        print("7) Show recent console (tail)")
-        print("8) Attach console (screen -r)")
-        print("9) Send command to server")
-        print("10) Backup server (ZIP)")
-        print("startall) Start ALL servers")
-        print("stopall)  Stop ALL servers")
-        print("base)     Change servers base directory")
-        print("0) Back")
-        choice = input("\nChoose: ").strip().lower()
+        print("=== MCSmaker · Servers ===")
+        print(f"Base: {base} | RAM: {cfg['memory']} | Java: {cfg['java_path']}")
+        print("1/build) New server (Mojang version)")
+        print("2/ls) List servers")
+        print("3/st) Status")
+        print("4/start) Start (screen)")
+        print("5/stop) Stop")
+        print("6/re) Restart")
+        print("7/log) Tail logs")
+        print("8/attach) Attach console")
+        print("9/cmd) Send command")
+        print("10/bk) Backup")
+        print("sa/startall) Start all")
+        print("so/stopall) Stop all")
+        print("base) Change base dir")
+        print("0/back) Back")
+        choice = input("\n> ").strip().lower()
         act = actions.get(choice)
         if act is None:
-            print("[WARN] Unknown option.")
-            time.sleep(0.6)
-            continue
+            print("[WARN] ?"); time.sleep(0.6); continue
         if not act():
             break
 
-# ================== SETTINGS MENU ==================
+# ================== SETTINGS ==================
 def settings_menu(cfg: dict):
     while True:
         clear()
         print("=== MCSmaker · Settings ===")
-        print(f"1) JARs dir         : {cfg['jars_dir']}")
-        print(f"2) Servers base dir : {cfg['servers_base']}")
-        print(f"3) Java path        : {cfg['java_path']}")
-        print(f"4) Default RAM      : {cfg['memory']}")
-        print(f"5) Default mod loader : {cfg.get('default_mod_loader','vanilla')}")
+        print(f"1) JARs dir: {cfg['jars_dir']}")
+        print(f"2) Servers dir: {cfg['servers_base']}")
+        print(f"3) Java: {cfg['java_path']}")
+        print(f"4) RAM: {cfg['memory']}")
+        print(f"5) Default loader: {cfg['default_mod_loader']}")
         print("0) Back")
-        c = input("\nChange which? ").strip()
+        c = input("\nChange #: ").strip()
         if c == "1":
-            p = input("New JARs dir: ").strip()
-            if p: cfg["jars_dir"] = p; save_cfg(cfg)
-        elif c == "2":
-            p = input("New Servers base dir: ").strip()
-            if p: cfg["servers_base"] = p; save_cfg(cfg)
-        elif c == "3":
-            p = input("Java path (e.g., java or /usr/bin/java): ").strip()
-            if p: cfg["java_path"] = p; save_cfg(cfg)
-        elif c == "4":
-            p = input("Default RAM (e.g., 4G or 4096M): ").strip()
+            p = input("JARs dir: ").strip()
             if p:
-                cfg["memory"] = normalize_ram(p, cfg["memory"])
+                cfg["jars_dir"] = p
                 save_cfg(cfg)
+        elif c == "2":
+            p = input("Servers dir: ").strip()
+            if p:
+                cfg["servers_base"] = p
+                save_cfg(cfg)
+        elif c == "3":
+            p = input("Java path: ").strip()
+            if p:
+                cfg["java_path"] = p
+                save_cfg(cfg)
+        elif c == "4":
+            p = input("RAM (4G): ").strip()
+            if p: cfg["memory"] = normalize_ram(p, cfg["memory"]); save_cfg(cfg)
         elif c == "5":
-            print("1) Vanilla   2) Fabric   3) Forge")
-            ch = input("Choice [1-3] (default = 1): ").strip() or "1"
-            cfg["default_mod_loader"] = {"1":"vanilla","2":"fabric","3":"forge"}.get(ch, "vanilla")
+            print("1) Vanilla 2) Fabric 3) Forge")
+            ch = input("Default [1]: ").strip() or "1"
+            loader_map = {"1": "vanilla", "2": "fabric", "3": "forge"}
+            cfg["default_mod_loader"] = loader_map.get(ch, "vanilla")
             save_cfg(cfg)
         elif c == "0":
             break
+        else:
+            print("[WARN] ?"); time.sleep(0.6)
 
-# ================== MAIN MENU ==================
+# ================== MAIN ==================
 def main_menu():
     check_and_install_dependencies()
-    check_for_updates(auto_prompt=True)
+    check_for_updates(auto_prompt=True)  # Now safe!
 
     global cfg
     cfg = load_cfg()
@@ -1084,15 +1173,17 @@ def main_menu():
     def do_servers(): servers_menu(cfg); return True
     def do_mods(): mods_menu(cfg); return True
     def do_settings(): settings_menu(cfg); return True
-    def do_update(): self_update(); input("Press ENTER…"); return True
+    def do_update(): 
+        if self_update(): sys.exit(0)
+        input("ENTER…"); return True
     def do_exit(): print("[BYE]"); return False
-    def unknown(): print("[WARN] Unknown option."); time.sleep(0.6); return True
+    def unknown(): print("[WARN] ?"); time.sleep(0.6); return True
 
     actions = {
-        "1": do_jars,
-        "2": do_servers,
-        "3": do_mods,
-        "4": do_settings,
+        "1": do_jars, "jars": do_jars,
+        "2": do_servers, "servers": do_servers,
+        "3": do_mods, "mods": do_mods,
+        "4": do_settings, "set": do_settings,
         "u": do_update, "update": do_update,
         "0": do_exit, "q": do_exit, "exit": do_exit
     }
@@ -1100,25 +1191,24 @@ def main_menu():
     while True:
         clear()
         print(rf"""
-
 ███╗   ███╗ ██████╗███████╗    ███╗   ███╗ █████╗ ██╗  ██╗███████╗██████╗ 
 ████╗ ████║██╔════╝██╔════╝    ████╗ ████║██╔══██╗██║ ██╔╝██╔════╝██╔══██╗
 ██╔████╔██║██║     ███████╗    ██╔████╔██║███████║█████╔╝ █████╗  ██████╔╝
 ██║╚██╔╝██║██║     ╚════██║    ██║╚██╔╝██║██╔══██║██╔═██╗ ██╔══╝  ██╔══██╗
-██║ ╚═╝ ██║╚██████╗███████║    ██║ ╚═╝ ██║██║  ██║██║  ██╗███████╗██║  ██║
+██║ ╚═╝ ██║██████╗███████║    ██║ ╚═╝ ██║██║  ██║██║  ██╗███████╗██║  ██║
 ╚═╝     ╚═╝ ╚═════╝╚══════╝    ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
-                                                                          
-                 MCSMAKER — Minecraft Automation Tool by Nico19422009 · v{CURRENT_VERSION}
-""")
-        print("1) JARs")
-        print("2) Servers")
-        print("3) Mods")
-        print("4) Settings")
-        print("U) Update program")
-        print("0) Exit")
-        choice = input("\nChoose: ").strip().lower()
+
+        MCSmaker v{CURRENT_VERSION} — Modded Minecraft Server Manager
+        """)
+        print("1/jars) Manage JARs")
+        print("2/servers) Servers (build/start/stop)")
+        print("3/mods) Mods (add/list/delete)")
+        print("4/set) Settings")
+        print("u/update) Update")
+        print("0/q) Exit")
+        choice = input("\n> ").strip().lower()
         act = actions.get(choice, unknown)
-        if act is None or not act():
+        if not act():
             break
 
 if __name__ == "__main__":
@@ -1126,3 +1216,6 @@ if __name__ == "__main__":
         main_menu()
     except KeyboardInterrupt:
         print("\n[BYE]")
+    except Exception as e:
+        print(f"[FATAL] {e}")
+        input("ENTER to exit...")
