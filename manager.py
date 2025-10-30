@@ -19,7 +19,7 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.5.5"  # Keep in sync with version.txt in the repo
+CURRENT_VERSION = "1.5.6"  # Keep in sync with version.txt in the repo
 
 # RAW GitHub URLs
 REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/manager.py"
