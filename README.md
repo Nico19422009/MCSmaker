@@ -7,7 +7,9 @@ MCSmaker is a simple Python-based tool to manage Minecraft servers with ease. It
 ## ✨ Features
 
 - **Interactive menu-based interface**
-- **Download Minecraft server JARs directly from Mojang**
+- **Download Minecraft server JARs**
+  - Vanilla directly from Mojang
+  - Paper, Fabric, and Forge installers/builds
 - **Create full server setups**:
   - Generates `eula.txt`, `server.properties`, and `start.sh`
   - Default memory allocation: 4GB
@@ -54,8 +56,8 @@ mcsmaker
 ```
 
 Follow the interactive menu to:
-- Download JARs
-- Create servers
+- Download JARs (vanilla, Paper, Fabric, Forge)
+- Create servers (vanilla, Paper, Fabric, Forge)
 - Start/Stop servers
 - Backup servers
 - View logs
@@ -69,13 +71,11 @@ screen -r mc_<servername>
 
 ---
 
-## 📖 Patch Notes v1.5.0
+## 📖 Patch Notes v1.6.1
 
-- Servers now run inside dedicated `screen` sessions
-- Added server backup, log view, and console hints
-- Improved start/stop handling
-- Installer now auto-updates itself and creates global `mcsmaker` shortcut
-- Cleaner error handling and bug fixes
+- Added JAR management menu to download vanilla, Paper, Fabric, and Forge artifacts
+- Added Paper server support alongside Fabric and Forge when building modded servers
+- Updated settings to allow selecting Paper as the default mod loader
 
 ---
 
