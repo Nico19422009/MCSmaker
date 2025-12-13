@@ -19,6 +19,7 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
 CURRENT_VERSION = "1.7.0"
+VERSION_FILE = Path(__file__).with_name("version.txt")
 USER_AGENT = f"{APP_NAME}/{CURRENT_VERSION}"
 
 REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/manager.py"
@@ -141,6 +142,20 @@ def load_cfg() -> dict:
 
 def save_cfg(cfg: dict):
     Path(CONFIG_FILE).write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+def sync_version_file():
+    """Ensure version.txt reflects CURRENT_VERSION with a trailing newline."""
+    try:
+        if VERSION_FILE.read_text(encoding="utf-8").strip() == CURRENT_VERSION:
+            return
+    except FileNotFoundError:
+        pass
+    except Exception:
+        print("[WARN] Could not read version.txt; rewriting it.")
+    try:
+        VERSION_FILE.write_text(f"{CURRENT_VERSION}\n", encoding="utf-8")
+    except Exception as e:
+        print(f"[WARN] Unable to sync version.txt ({e}).")
 
 def safe_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", (s or "")).strip("_") or "server"
@@ -1117,6 +1132,7 @@ def settings_menu(cfg: dict):
 # ================== MAIN ==================
 def main_menu():
     check_and_install_dependencies()
+    sync_version_file()
     check_for_updates(auto_prompt=True)
 
     global cfg

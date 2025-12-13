@@ -73,11 +73,17 @@ screen -r mc_<servername>
 
 ---
 
-## 📖 Patch Notes v1.7.0
+## 📖 Patch Notes
 
+### v1.7.0
 - Added Java runtime checks with warnings when the detected version is below Java 8 and guidance to use Java 17+
 - Installer now prefers installing OpenJDK 17, falling back to the distro default JDK if needed
 - Clarified Java expectations and installer behavior in the usage documentation
+
+### v1.6.1
+- Added Paper downloads to the JAR manager alongside Fabric and Forge
+- Updated modded server creation flow to include Paper as a selectable loader
+- Improved vanilla download handling to avoid duplicate partial files in the cache
 
 ---
 
