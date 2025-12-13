@@ -41,7 +41,7 @@ cd MCSmaker
 ```
 
 This will:
-- Install Python, Java, and Screen
+- Install Python, Java 17 (falls back to distro default), and Screen
 - Download the latest `manager.py`
 - Create a global `mcsmaker` command
 
@@ -63,6 +63,8 @@ Follow the interactive menu to:
 - View logs
 - Change settings
 
+> **Java version:** Minecraft servers need Java 8+, and modern versions expect Java 17+. The installer tries to pull OpenJDK 17 and the manager will warn if it detects an older runtime. You can point to a custom Java binary under **Settings → Java** if needed.
+
 Attach to a running server console:
 ```bash
 screen -r mc_<servername>
@@ -71,11 +73,17 @@ screen -r mc_<servername>
 
 ---
 
-## 📖 Patch Notes v1.6.1
+## 📖 Patch Notes
 
-- Added JAR management menu to download vanilla, Paper, Fabric, and Forge artifacts
-- Added Paper server support alongside Fabric and Forge when building modded servers
-- Updated settings to allow selecting Paper as the default mod loader
+### v1.7.0
+- Added Java runtime checks with warnings when the detected version is below Java 8 and guidance to use Java 17+
+- Installer now prefers installing OpenJDK 17, falling back to the distro default JDK if needed
+- Clarified Java expectations and installer behavior in the usage documentation
+
+### v1.6.1
+- Added Paper downloads to the JAR manager alongside Fabric and Forge
+- Updated modded server creation flow to include Paper as a selectable loader
+- Improved vanilla download handling to avoid duplicate partial files in the cache
 
 ---
 

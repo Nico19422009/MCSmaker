@@ -18,7 +18,8 @@ MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.6.1"
+CURRENT_VERSION = "1.7.0"
+VERSION_FILE = Path(__file__).with_name("version.txt")
 USER_AGENT = f"{APP_NAME}/{CURRENT_VERSION}"
 
 REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/manager.py"
@@ -142,6 +143,20 @@ def load_cfg() -> dict:
 def save_cfg(cfg: dict):
     Path(CONFIG_FILE).write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
+def sync_version_file():
+    """Ensure version.txt reflects CURRENT_VERSION with a trailing newline."""
+    try:
+        if VERSION_FILE.read_text(encoding="utf-8").strip() == CURRENT_VERSION:
+            return
+    except FileNotFoundError:
+        pass
+    except Exception:
+        print("[WARN] Could not read version.txt; rewriting it.")
+    try:
+        VERSION_FILE.write_text(f"{CURRENT_VERSION}\n", encoding="utf-8")
+    except Exception as e:
+        print(f"[WARN] Unable to sync version.txt ({e}).")
+
 def safe_name(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", (s or "")).strip("_") or "server"
 
@@ -252,28 +267,55 @@ def warn_if_heap_too_big(mem_str: str):
         print(f"[WARN] Requested heap {want_mb}MB is close to/above system RAM {total}MB. Consider lowering it.")
 
 # ================== DEPENDENCY CHECK ==================
-REQUIRED_PKGS = ["python3", "default-jdk", "screen"]
+REQUIRED_PKGS = ["python3", "screen"]
+MIN_SUPPORTED_JAVA = 8
+RECOMMENDED_JAVA = 17
 
 def _dpkg_installed(pkg: str) -> bool:
     res = subprocess.run(["dpkg", "-s", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return res.returncode == 0
 
+def _java_major_from_output(ver_output: str) -> int | None:
+    m = re.search(r'"(\d+)(?:\.(\d+))?', ver_output)
+    if not m:
+        return None
+    first = int(m.group(1))
+    second = m.group(2)
+    if first == 1 and second:
+        return int(second)
+    return first
+
 def check_and_install_dependencies():
     print("[*] Checking dependencies…")
     java_path = shutil.which("java")
     if not java_path:
-        print("[WARN] No Java found. Installing default-jdk via apt…")
+        print("[WARN] No Java found. Installing OpenJDK 17 via apt…")
         try:
             subprocess.run(["sudo", "apt-get", "update", "-y"], check=True)
-            subprocess.run(["sudo", "apt-get", "install", "-y", "default-jdk"], check=True)
+            if subprocess.run(["sudo", "apt-get", "install", "-y", "openjdk-17-jdk"], check=False).returncode != 0:
+                print("[WARN] openjdk-17-jdk not available, falling back to default-jdk")
+                subprocess.run(["sudo", "apt-get", "install", "-y", "default-jdk"], check=True)
+            java_path = shutil.which("java")
             print("[OK] Java installed.")
         except Exception as e:
             print(f"[ERR] Could not install Java: {e}")
-            print("Please install manually: sudo apt-get install default-jdk")
-    else:
-        try: ver = subprocess.check_output(["java", "-version"], stderr=subprocess.STDOUT).decode().splitlines()[0]
-        except Exception: ver = "(version unknown)"
-        print(f"[OK] Found Java at {java_path} {ver}")
+            print("Please install manually: sudo apt-get install openjdk-17-jdk")
+    ver_output = ""
+    if java_path:
+        try:
+            ver_output = subprocess.check_output([java_path, "-version"], stderr=subprocess.STDOUT).decode()
+            first_line = ver_output.splitlines()[0] if ver_output.splitlines() else ""
+        except Exception as e:
+            first_line = f"(version unknown: {e})"
+        else:
+            first_line = first_line or "(version unknown)"
+        print(f"[OK] Found Java at {java_path} {first_line}")
+        major = _java_major_from_output(ver_output)
+        if major and major < MIN_SUPPORTED_JAVA:
+            print(f"[ERR] Java {major} detected. Minecraft requires at least Java {MIN_SUPPORTED_JAVA}. Install Java {RECOMMENDED_JAVA}+ to avoid 'Unsupported major.minor version' errors.")
+            print("      Example: sudo apt-get install openjdk-17-jdk and update Settings > Java path if needed.")
+        elif major and major < RECOMMENDED_JAVA:
+            print(f"[WARN] Java {major} detected. Java {RECOMMENDED_JAVA}+ is recommended for modern servers (Forge/Fabric/Paper).")
 
     missing = [pkg for pkg in REQUIRED_PKGS if not _dpkg_installed(pkg)]
     if missing:
@@ -1090,6 +1132,7 @@ def settings_menu(cfg: dict):
 # ================== MAIN ==================
 def main_menu():
     check_and_install_dependencies()
+    sync_version_file()
     check_for_updates(auto_prompt=True)
 
     global cfg
