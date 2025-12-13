@@ -18,9 +18,12 @@ sudo apt update -y
 # Python
 sudo apt install -y python3 python3-pip
 
-# Java (latest stable from repos)
-echo "Installing OpenJDK..."
-sudo apt install -y default-jdk
+# Java (prefer OpenJDK 17, fall back to distro default)
+echo "Installing OpenJDK 17 (fallback: default-jdk)..."
+if ! sudo apt install -y openjdk-17-jdk; then
+  echo "[WARN] openjdk-17-jdk not available, trying default-jdk"
+  sudo apt install -y default-jdk
+fi
 
 # Screen
 sudo apt install -y screen

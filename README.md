@@ -7,7 +7,9 @@ MCSmaker is a simple Python-based tool to manage Minecraft servers with ease. It
 ## ✨ Features
 
 - **Interactive menu-based interface**
-- **Download Minecraft server JARs directly from Mojang**
+- **Download Minecraft server JARs**
+  - Vanilla directly from Mojang
+  - Paper, Fabric, and Forge installers/builds
 - **Create full server setups**:
   - Generates `eula.txt`, `server.properties`, and `start.sh`
   - Default memory allocation: 4GB
@@ -39,7 +41,7 @@ cd MCSmaker
 ```
 
 This will:
-- Install Python, Java, and Screen
+- Install Python, Java 17 (falls back to distro default), and Screen
 - Download the latest `manager.py`
 - Create a global `mcsmaker` command
 
@@ -54,12 +56,14 @@ mcsmaker
 ```
 
 Follow the interactive menu to:
-- Download JARs
-- Create servers
+- Download JARs (vanilla, Paper, Fabric, Forge)
+- Create servers (vanilla, Paper, Fabric, Forge)
 - Start/Stop servers
 - Backup servers
 - View logs
 - Change settings
+
+> **Java version:** Minecraft servers need Java 8+, and modern versions expect Java 17+. The installer tries to pull OpenJDK 17 and the manager will warn if it detects an older runtime. You can point to a custom Java binary under **Settings → Java** if needed.
 
 Attach to a running server console:
 ```bash
@@ -69,13 +73,11 @@ screen -r mc_<servername>
 
 ---
 
-## 📖 Patch Notes v1.5.0
+## 📖 Patch Notes v1.7.0
 
-- Servers now run inside dedicated `screen` sessions
-- Added server backup, log view, and console hints
-- Improved start/stop handling
-- Installer now auto-updates itself and creates global `mcsmaker` shortcut
-- Cleaner error handling and bug fixes
+- Added Java runtime checks with warnings when the detected version is below Java 8 and guidance to use Java 17+
+- Installer now prefers installing OpenJDK 17, falling back to the distro default JDK if needed
+- Clarified Java expectations and installer behavior in the usage documentation
 
 ---
 
