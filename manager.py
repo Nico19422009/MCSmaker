@@ -12,13 +12,14 @@ DEFAULTS = {
     "servers_base": "minecraft_servers",
     "java_path": "java",
     "memory": "4G",
-    "default_mod_loader": "vanilla"   # vanilla | fabric | forge
+    "default_mod_loader": "vanilla"   # vanilla | fabric | forge | paper
 }
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 # ------- Self-update config ----------
 APP_NAME = "MCSmaker"
-CURRENT_VERSION = "1.6.0"
+CURRENT_VERSION = "1.6.1"
+USER_AGENT = f"{APP_NAME}/{CURRENT_VERSION}"
 
 REMOTE_MANAGER_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/manager.py"
 REMOTE_VERSION_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/main/version.txt"
@@ -151,7 +152,7 @@ def write_text(path: Path, content: str, mode=0o644):
     except: pass
 
 def fetch_json(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "MCSmaker/1.6.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.load(resp)
 
@@ -160,7 +161,7 @@ def download_with_resume(url: str, dest: Path) -> bool:
     part = dest.with_suffix(dest.suffix + ".part")
     if dest.exists():
         print(f"[SKIP] {dest.name} already exists."); return True
-    headers = {"User-Agent": "MCSmaker/1.6.0"}
+    headers = {"User-Agent": USER_AGENT}
     downloaded = 0
     if part.exists():
         downloaded = part.stat().st_size
