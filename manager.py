@@ -28,6 +28,7 @@ REMOTE_VERSION_URL = "https://raw.githubusercontent.com/Nico19422009/MCSmaker/ma
 # ------------------------------------------------------------------
 FABRIC_META_URL = "https://meta.fabricmc.net/v2/versions/loader/{mc_version}"
 FORGE_META_URL  = "https://files.minecraftforge.net/net/minecraftforge/forge/index_{mc_version}.html"
+PAPER_API_BASE = "https://api.papermc.io/v2/projects/paper"
 
 # ================== HTTP HELPERS ==================
 def _http_get(url: str, timeout: int = 10, cache_bust: bool = True) -> bytes:
@@ -333,6 +334,30 @@ def fetch_forge_installer_url(mc_version: str) -> str | None:
                   r'(?P<ver>[^"/]+)/(?P<file>forge-[^"/]+-installer\.jar))"', html)
     return m.group(1) if m else None
 
+def fetch_paper_latest_download(mc_version: str) -> tuple[str | None, str | None]:
+    try:
+        ver_meta = fetch_json(f"{PAPER_API_BASE}/versions/{mc_version}")
+    except Exception as e:
+        print(f"[ERR] Paper versions for {mc_version}: {e}")
+        return None, None
+
+    builds = ver_meta.get("builds", [])
+    if not builds:
+        print(f"[ERR] No Paper builds found for {mc_version}.")
+        return None, None
+
+    latest_build = builds[-1]
+    try:
+        build_meta = fetch_json(f"{PAPER_API_BASE}/versions/{mc_version}/builds/{latest_build}")
+    except Exception as e:
+        print(f"[ERR] Paper build metadata: {e}")
+        return None, None
+
+    app = build_meta.get("downloads", {}).get("application", {})
+    dl_name = app.get("name") or f"paper-{mc_version}-{latest_build}.jar"
+    dl_url = f"{PAPER_API_BASE}/versions/{mc_version}/builds/{latest_build}/downloads/{dl_name}"
+    return dl_url, dl_name
+
 def install_forge(installer_jar: Path, server_dir: Path, java_path: str) -> bool:
     cmd = [java_path, "-jar", str(installer_jar), "--installServer"]
     print(f"[*] Running Forge installer …")
@@ -388,6 +413,20 @@ def get_mod_loader_jar(mc_version: str, loader: str, cache_dir: Path, server_dir
         print("[ERR] Forge installed but no JAR found.")
         return None
 
+    # ---------- PAPER ----------
+    if loader == "paper":
+        url, fname = fetch_paper_latest_download(mc_version)
+        if not url or not fname:
+            return None
+        dest = cache_dir / fname
+        if not dest.exists():
+            print(f"[*] Downloading Paper {mc_version} …")
+            if not download_with_resume(url, dest):
+                return None
+        final = server_dir / dest.name
+        shutil.copy2(dest, final)
+        return final
+
     return None
 
 # ================== LAUNCH SCRIPTS ==================
@@ -438,12 +477,10 @@ def create_server_folder(base_dir: Path, server_name: str, version_id: str,
         cached = copy_jar_from_cache(jars_dir, version_id, folder)
         if not cached:
             print(f"[*] Downloading vanilla {version_id} …")
-            tmp = jars_dir / f"{jar_name}.part"
-            if not download_with_resume(jar_url, tmp):
+            cache_dest = jars_dir / jar_name
+            if not download_with_resume(jar_url, cache_dest):
                 return False
-            final_cache = jars_dir / jar_name
-            tmp.replace(final_cache)
-            shutil.copy2(final_cache, jar_path)
+            shutil.copy2(cache_dest, jar_path)
         else:
             jar_path = cached
         jar_name = jar_path.name
@@ -693,7 +730,7 @@ def servers_menu_pick_server(base: Path, prompt: str = "Select server") -> Path 
 # ================== MODDED SERVER BUILDER MENU ==================
 def build_modded_server_menu(cfg: dict):
     """
-    Unified menu for **Vanilla / Fabric / Forge** server creation.
+    Unified menu for **Vanilla / Fabric / Forge / Paper** server creation.
     Re-uses all the heavy-lifting functions defined above.
     """
     base = Path(cfg["servers_base"]).expanduser().resolve()
@@ -707,17 +744,18 @@ def build_modded_server_menu(cfg: dict):
         print("1) Vanilla")
         print("2) Fabric")
         print("3) Forge")
+        print("4) Paper")
         print("0) Back")
-        choice = input("\nLoader [1-3]: ").strip()
+        choice = input("\nLoader [1-4]: ").strip()
 
-        if choice not in ("1", "2", "3"):
+        if choice not in ("1", "2", "3", "4"):
             if choice == "0":
                 break
             print("[WARN] Invalid choice.")
             time.sleep(0.7)
             continue
 
-        loader_map = {"1": "vanilla", "2": "fabric", "3": "forge"}
+        loader_map = {"1": "vanilla", "2": "fabric", "3": "forge", "4": "paper"}
         loader = loader_map[choice]
 
         # ----- Minecraft version -----
@@ -762,6 +800,135 @@ def build_modded_server_menu(cfg: dict):
             print("\nServer is ready! Add mods to ./mods/ and run ./start.sh")
         input("\nPress ENTER to continue…")
 
+# ================== JARS MENU ==================
+def list_cached_jars(jars_dir: Path):
+    jars = sorted(jars_dir.glob("*.jar"))
+    if not jars:
+        print("[INFO] No cached JARs yet.")
+        return
+    print("\nCached JARs:")
+    for j in jars:
+        try:
+            size_kb = j.stat().st_size / 1024
+            print(f"  - {j.name} ({size_kb:.1f} KB)")
+        except Exception:
+            print(f"  - {j.name}")
+
+
+def download_vanilla_jar(jars_dir: Path):
+    try:
+        manifest = fetch_json(MANIFEST_URL)
+        latest_release = manifest.get("latest", {}).get("release")
+        versions = manifest.get("versions", [])
+    except Exception as e:
+        print(f"[ERR] Could not load manifest: {e}")
+        input("ENTER…")
+        return
+
+    default_version = latest_release or (versions[0]["id"] if versions else "")
+    mc_version = input(f"Minecraft version [{default_version}]: ").strip() or default_version
+    ver_obj = next((v for v in versions if v["id"] == mc_version), None)
+    if not ver_obj:
+        print(f"[ERR] Version {mc_version} not found in manifest.")
+        input("ENTER…")
+        return
+
+    try:
+        jar_url = get_server_jar_url(ver_obj)
+    except Exception as e:
+        print(f"[ERR] Could not get server.jar URL: {e}")
+        input("ENTER…")
+        return
+
+    dest = jars_dir / f"server-{safe_name(mc_version)}.jar"
+    download_with_resume(jar_url, dest)
+    input("ENTER…")
+
+
+def download_fabric_jar(jars_dir: Path):
+    mc_version = input("Minecraft version (e.g. 1.21.1): ").strip()
+    if not mc_version:
+        return
+    url = fetch_fabric_loader_json(mc_version)
+    if not url:
+        input("ENTER…")
+        return
+    dest = jars_dir / f"fabric-server-{mc_version}.jar"
+    download_with_resume(url, dest)
+    input("ENTER…")
+
+
+def download_forge_installer(jars_dir: Path):
+    mc_version = input("Minecraft version for Forge: ").strip()
+    if not mc_version:
+        return
+    url = fetch_forge_installer_url(mc_version)
+    if not url:
+        print(f"[ERR] No Forge installer found for {mc_version}.")
+        input("ENTER…")
+        return
+    dest = jars_dir / f"forge-{mc_version}-installer.jar"
+    download_with_resume(url, dest)
+    input("ENTER…")
+
+
+def download_paper_jar(jars_dir: Path):
+    try:
+        meta = fetch_json(PAPER_API_BASE)
+        versions = meta.get("versions", [])
+    except Exception as e:
+        print(f"[ERR] Could not fetch Paper versions: {e}")
+        input("ENTER…")
+        return
+
+    default_version = versions[-1] if versions else ""
+    mc_version = input(f"Minecraft version for Paper [{default_version}]: ").strip() or default_version
+    if not mc_version:
+        print("[ERR] Version required.")
+        input("ENTER…")
+        return
+
+    url, fname = fetch_paper_latest_download(mc_version)
+    if not url or not fname:
+        input("ENTER…")
+        return
+
+    dest = jars_dir / fname
+    download_with_resume(url, dest)
+    input("ENTER…")
+
+
+def jars_menu(cfg: dict):
+    jars_dir = Path(cfg["jars_dir"]).expanduser().resolve()
+    jars_dir.mkdir(parents=True, exist_ok=True)
+
+    actions = {
+        "1": download_vanilla_jar,
+        "2": download_paper_jar,
+        "3": download_fabric_jar,
+        "4": download_forge_installer,
+        "5": list_cached_jars,
+    }
+
+    while True:
+        clear()
+        print("=== MCSmaker · JAR Downloads ===")
+        print("1) Download vanilla server.jar")
+        print("2) Download Paper server.jar")
+        print("3) Download Fabric server.jar")
+        print("4) Download Forge installer")
+        print("5) List cached JARs")
+        print("0) Back")
+        c = input("\nChoose: ").strip()
+        if c == "0":
+            break
+        action = actions.get(c)
+        if not action:
+            print("[WARN] Unknown option.")
+            time.sleep(0.6)
+            continue
+        action(jars_dir)
+
 # ================== MODS MENU (unchanged) ==================
 def mods_menu(cfg: dict):
     base = Path(cfg["servers_base"]).expanduser().resolve()
@@ -771,7 +938,7 @@ def mods_menu(cfg: dict):
         print("1) List mods in server")
         print("2) Add mod (URL download)")
         print("3) Delete mod")
-        print("4) Build modded server (Fabric/Forge/Vanilla)   <-- NEW")
+        print("4) Build modded server (Vanilla/Fabric/Forge/Paper)   <-- NEW")
         print("0) Back")
         c = input("\nChoose: ").strip()
 
@@ -909,9 +1076,9 @@ def settings_menu(cfg: dict):
             p = input("RAM (4G): ").strip()
             if p: cfg["memory"] = normalize_ram(p, cfg["memory"]); save_cfg(cfg)
         elif c == "5":
-            print("1) Vanilla 2) Fabric 3) Forge")
+            print("1) Vanilla 2) Fabric 3) Forge 4) Paper")
             ch = input("Default [1]: ").strip() or "1"
-            loader_map = {"1": "vanilla", "2": "fabric", "3": "forge"}
+            loader_map = {"1": "vanilla", "2": "fabric", "3": "forge", "4": "paper"}
             cfg["default_mod_loader"] = loader_map.get(ch, "vanilla")
             save_cfg(cfg)
         elif c == "0":
@@ -930,9 +1097,7 @@ def main_menu():
     Path(cfg["servers_base"]).expanduser().mkdir(parents=True, exist_ok=True)
 
     def do_jars():
-        print("[INFO] jars_menu is not yet implemented.")
-        input("Press ENTER…")
-        return True
+        jars_menu(cfg); return True
 
     def do_servers(): servers_menu(cfg); return True
     def do_mods(): mods_menu(cfg); return True
@@ -966,7 +1131,7 @@ def main_menu():
         """)
         print("1/jars) Manage JARs")
         print("2/servers) Servers (build/start/stop)")
-        print("3/mods) Mods (add/list/delete) + **Build Fabric/Forge**")
+        print("3/mods) Mods (add/list/delete) + **Build Vanilla/Fabric/Forge/Paper**")
         print("4/set) Settings")
         print("u/update) Update")
         print("0/q) Exit")
