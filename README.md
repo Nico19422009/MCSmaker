@@ -34,4 +34,4 @@ npm start
 
 ## 📝 Notes
 
-The Electron GUI is the primary interface for launching and managing servers.
+The original Python CLI remains in the repository for reference, but the Electron GUI is now the primary interface for launching and managing servers.
