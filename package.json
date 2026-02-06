@@ -1,0 +1,14 @@
+{
+  "name": "mcsmaker",
+  "version": "2.0.0",
+  "description": "Minecraft server launcher with an Electron GUI",
+  "main": "src/main/main.js",
+  "author": "MCSmaker",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^30.0.0"
+  }
+}
