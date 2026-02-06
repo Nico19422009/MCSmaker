@@ -29,10 +29,9 @@ npm start
 - Server entries are saved in your Electron user data path as `mcsmaker-servers.json`.
 - Created server folders live under `servers/` inside the same user data path.
 - Version options are loaded from `servers.json` in this repo.
-- The first time you start a server, the launcher downloads the matching `server.jar` into the server folder.
 
 ---
 
 ## 📝 Notes
 
-The Electron GUI is the primary interface for launching and managing servers.
+The original Python CLI remains in the repository for reference, but the Electron GUI is now the primary interface for launching and managing servers.

@@ -159,7 +159,7 @@ const loadVersions = async () => {
     return;
   }
 
-  versions.forEach((version) => {
+  versions.slice(0, 50).forEach((version) => {
     const option = document.createElement('option');
     option.value = version;
     option.textContent = version;

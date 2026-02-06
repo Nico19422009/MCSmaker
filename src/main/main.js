@@ -1,7 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
 
 const APP_TITLE = 'MCSmaker Launcher';
 
@@ -51,28 +50,6 @@ const listVersions = () => {
   }
   return result;
 };
-
-const getVersionEntry = (versionName) => {
-  const versionsData = readJsonFile(getVersionsPath(), { servers: [] });
-  return (versionsData.servers || []).find((entry) => entry.name === versionName) || null;
-};
-
-const downloadFile = (url, destPath) =>
-  new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(destPath);
-    https
-      .get(url, (response) => {
-        if (response.statusCode !== 200) {
-          reject(new Error(`Download failed (${response.statusCode})`));
-          return;
-        }
-        response.pipe(file);
-        file.on('finish', () => file.close(resolve));
-      })
-      .on('error', (error) => {
-        fs.unlink(destPath, () => reject(error));
-      });
-  });
 
 const createWindow = () => {
   const win = new BrowserWindow({
@@ -127,11 +104,6 @@ ipcMain.handle('servers:create', (event, payload) => {
     return { error: 'A server with this name already exists.' };
   }
 
-  const versionEntry = getVersionEntry(version);
-  if (!versionEntry?.url || !versionEntry.url.startsWith('http')) {
-    return { error: 'Selected version is missing a download URL.' };
-  }
-
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const serverDir = path.join(getServersRoot(), name);
   ensureDir(serverDir);
@@ -140,7 +112,6 @@ ipcMain.handle('servers:create', (event, payload) => {
     id,
     name,
     version,
-    jarUrl: versionEntry.url,
     status: 'stopped',
     createdAt: new Date().toISOString(),
     path: serverDir,
@@ -153,23 +124,11 @@ ipcMain.handle('servers:create', (event, payload) => {
   return { server: newServer, servers: store.servers };
 });
 
-ipcMain.handle('servers:start', async (event, serverId) => {
+ipcMain.handle('servers:start', (event, serverId) => {
   const store = readServerStore();
   const server = store.servers.find((entry) => entry.id === serverId);
   if (!server) {
     return { error: 'Server not found.' };
-  }
-
-  const jarPath = path.join(server.path, 'server.jar');
-  if (!fs.existsSync(jarPath)) {
-    if (!server.jarUrl) {
-      return { error: 'No server JAR URL found for this version.' };
-    }
-    try {
-      await downloadFile(server.jarUrl, jarPath);
-    } catch (error) {
-      return { error: `Failed to download server jar: ${error.message}` };
-    }
   }
 
   store.servers = store.servers.map((entry) => {
