@@ -3,42 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MCSmaker Launcher</title>
+    <title>MCSmaker</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <div class="app">
       <aside class="sidebar">
-        <header class="sidebar__header">
-          <h1>MCSmaker</h1>
-          <p>Server launcher</p>
-        </header>
-        <section class="sidebar__section">
-          <h2>Your servers</h2>
-          <ul class="server-list" id="serverList"></ul>
-        </section>
+        <header class="sidebar__header"><h1>MCSmaker</h1><p>Server manager</p></header>
+        <section class="sidebar__section"><h2>Your servers</h2><ul class="server-list" id="serverList"></ul></section>
       </aside>
-
       <main class="content">
-        <section class="details" id="serverDetails">
-          <div class="details__empty">
-            <h2>Select a server</h2>
-            <p>Choose a server from the left list to see details and start it.</p>
-          </div>
-        </section>
-
+        <section class="details" id="serverDetails"><div class="details__empty"><h2>Select a server</h2><p>Choose a server to manage it.</p></div></section>
         <section class="creator">
           <h2>Create a new server</h2>
           <form id="createForm">
-            <label class="field">
-              <span>Server name</span>
-              <input type="text" id="serverName" placeholder="My Awesome World" required />
-            </label>
-            <label class="field">
-              <span>Version</span>
-              <select id="serverVersion" required></select>
-            </label>
-            <button type="submit" class="primary">Create server</button>
+            <label class="field"><span>Server name</span><input type="text" id="serverName" placeholder="My Awesome World" required /></label>
+            <label class="field"><span>Loader</span><select id="serverLoader" required></select></label>
+            <label class="field"><span>Minecraft version</span><select id="serverVersion" required></select></label>
+            <label class="field"><span>Memory</span><input type="text" id="serverMemory" value="2G" pattern="[0-9]+[MmGg]" required /></label>
+            <button type="submit" class="primary">Download & create server</button>
             <p class="form__hint" id="formHint"></p>
           </form>
         </section>
