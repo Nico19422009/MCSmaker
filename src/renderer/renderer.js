@@ -3,6 +3,8 @@ const details = document.getElementById('serverDetails');
 const createForm = document.getElementById('createForm');
 const serverNameInput = document.getElementById('serverName');
 const serverVersionSelect = document.getElementById('serverVersion');
+const serverLoaderSelect = document.getElementById('serverLoader');
+const serverMemoryInput = document.getElementById('serverMemory');
 const formHint = document.getElementById('formHint');
 
 const api = window.mcsmaker || {
@@ -20,7 +22,8 @@ const api = window.mcsmaker || {
   createServer: async () => ({ error: 'Electron API unavailable in browser preview.' }),
   startServer: async () => ({ error: 'Electron API unavailable in browser preview.' }),
   stopServer: async () => ({ error: 'Electron API unavailable in browser preview.' }),
-  listVersions: async () => ({ versions: ['1.20.1', '1.20', '1.19.4'] })
+  listVersions: async () => ({ versions: ['1.21.8', '1.21.6', '1.20.4'] }),
+  listLoaders: async () => ({ loaders: ['vanilla', 'paper', 'fabric', 'forge'] })
 };
 
 let servers = [];
@@ -67,7 +70,7 @@ const renderServerList = () => {
 
     const info = document.createElement('div');
     info.className = 'server-card__info';
-    info.innerHTML = `<h3>${server.name}</h3><p>Version ${server.version}</p>`;
+    info.innerHTML = `<h3>${server.name}</h3><p>${server.loader || 'vanilla'} ${server.version}</p>`;
 
     const status = document.createElement('span');
     status.className = `status-pill${server.status === 'running' ? ' status-pill--running' : ''}`;
@@ -146,6 +149,16 @@ const renderDetails = () => {
   });
 };
 
+const loadLoaders = async () => {
+  const data = await api.listLoaders();
+  serverLoaderSelect.innerHTML = '';
+  (data?.loaders || []).forEach((loader) => {
+    const option = document.createElement('option');
+    option.value = loader;
+    option.textContent = loader[0].toUpperCase() + loader.slice(1);
+    serverLoaderSelect.appendChild(option);
+  });
+};
 const loadVersions = async () => {
   const data = await api.listVersions();
   const versions = data?.versions || [];
@@ -173,7 +186,9 @@ createForm.addEventListener('submit', async (event) => {
 
   const payload = {
     name: serverNameInput.value,
-    version: serverVersionSelect.value
+    loader: serverLoaderSelect.value,
+    version: serverVersionSelect.value,
+    memory: serverMemoryInput.value
   };
 
   const result = await api.createServer(payload);
@@ -190,6 +205,7 @@ createForm.addEventListener('submit', async (event) => {
 });
 
 const init = async () => {
+  await loadLoaders();
   await loadVersions();
   servers = await api.listServers();
   if (servers.length > 0) {
