@@ -1,6 +1,6 @@
 {
   "name": "mcsmaker",
-  "version": "3.0.0",
+  "version": "1.6.0",
   "description": "Minecraft server manager with a Linux-first CLI and Electron GUI",
   "main": "src/main/main.js",
   "author": "MCSmaker",
