@@ -1,37 +1,45 @@
-# MCSmaker Launcher
+# MCSmaker
 
-MCSmaker is now an Electron-based Minecraft server launcher. It gives you a clean GUI to list servers, start them with a play button, and create new server entries with a name and version selection.
+MCSmaker is a Minecraft server manager. It has an Electron GUI for desktops and a Linux-first CLI for headless servers.
 
----
+## Features
 
-## ✨ Features
+- Create, download, start and stop real Java servers
+- Vanilla, Paper, Fabric and Forge support
+- JAR downloads use mcutils, e.g. `https://mcutils.com/api/server-jars/paper/26.2/download`
+- One folder, `server.jar`, EULA file and persistent configuration per server
+- Detached Linux starts with PID tracking and logs in `logs/mcsmaker.log`
+- RAM limit per server, such as `2G`
 
-- **Server list with play buttons** for quick launches
-- **Server detail panel** with status and folder info
-- **Create new servers** by choosing a Minecraft version and naming the server
-- **Local data storage** in your system's user data directory
+## Linux server / CLI
 
----
+Requires Node.js 18+ and Java for the Minecraft version you choose.
 
-## 📦 Setup
+```bash
+git clone https://github.com/Nico19422009/MCSmaker.git
+cd MCSmaker
+chmod +x bin/mcsmaker bin/mcsmaker-cli.js
 
-Install dependencies and start the Electron app:
+# Create + download a Paper server
+./bin/mcsmaker create survival 1.21.8 paper 4G
+
+# Find the server ID, then start or stop it
+./bin/mcsmaker list
+./bin/mcsmaker start <server-id>
+./bin/mcsmaker stop <server-id>
+```
+
+Server files and the manager database are stored in `~/.local/share/mcsmaker` by default. Set `MCSMAKER_HOME` to use another folder.
+
+## Desktop GUI
 
 ```bash
 npm install
 npm start
 ```
 
----
+The GUI lets you choose the loader, Minecraft version and memory before it downloads the server.
 
-## 🗂️ Data
+## Notes
 
-- Server entries are saved in your Electron user data path as `mcsmaker-servers.json`.
-- Created server folders live under `servers/` inside the same user data path.
-- Version options are loaded from `servers.json` in this repo.
-
----
-
-## 📝 Notes
-
-The original Python CLI remains in the repository for reference, but the Electron GUI is now the primary interface for launching and managing servers.
+Forge and Fabric are downloaded through mcutils as requested. The selected version has to be available from the mcutils server-jars endpoint.
