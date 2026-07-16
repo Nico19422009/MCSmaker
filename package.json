@@ -1,15 +1,16 @@
 {
   "name": "mcsmaker",
   "version": "1.6.0",
-  "description": "Minecraft server manager with a Linux-first CLI and Electron GUI",
-  "main": "src/main/main.js",
-  "author": "MCSmaker",
-  "license": "MIT",
-  "scripts": {
-    "start": "electron .",
-    "cli": "node bin/mcsmaker-cli.js"
+  "description": "Single-file interactive Minecraft server manager for Linux terminals",
+  "main": "mcsmaker.js",
+  "bin": {
+    "mcsmaker": "mcsmaker.js"
   },
-  "devDependencies": {
-    "electron": "^30.0.0"
-  }
+  "scripts": {
+    "start": "node mcsmaker.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
 }
