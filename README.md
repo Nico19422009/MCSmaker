@@ -1,45 +1,61 @@
-# MCSmaker
+# MCSMaker 1.6.0
 
-MCSmaker is a Minecraft server manager. It has an Electron GUI for desktops and a Linux-first CLI for headless servers.
+MCSMaker is now one interactive terminal program made for Linux servers.
+
+It shows an ASCII banner and lets you control everything through numbered menus. No Electron or desktop is required.
 
 ## Features
 
-- Create, download, start and stop real Java servers
-- Vanilla, Paper, Fabric and Forge support
-- JAR downloads use mcutils, e.g. `https://mcutils.com/api/server-jars/paper/26.2/download`
-- One folder, `server.jar`, EULA file and persistent configuration per server
-- Detached Linux starts with PID tracking and logs in `logs/mcsmaker.log`
-- RAM limit per server, such as `2G`
+- Vanilla, Paper, Fabric and Forge through mcutils
+- Create and download servers
+- Start and stop real Java processes
+- Server status and PID display
+- RAM selection
+- Last 40 log lines
+- Full server backups
+- Safe server deletion with confirmation
+- Java, Node.js, storage and system check
+- Persistent data in `~/.local/share/mcsmaker`
 
-## Linux server / CLI
+## Start
 
-Requires Node.js 18+ and Java for the Minecraft version you choose.
+You need Node.js 18 or newer and the Java version required by your Minecraft server.
 
 ```bash
 git clone https://github.com/Nico19422009/MCSmaker.git
 cd MCSmaker
-chmod +x bin/mcsmaker bin/mcsmaker-cli.js
-
-# Create + download a Paper server
-./bin/mcsmaker create survival 1.21.8 paper 4G
-
-# Find the server ID, then start or stop it
-./bin/mcsmaker list
-./bin/mcsmaker start <server-id>
-./bin/mcsmaker stop <server-id>
-```
-
-Server files and the manager database are stored in `~/.local/share/mcsmaker` by default. Set `MCSMAKER_HOME` to use another folder.
-
-## Desktop GUI
-
-```bash
-npm install
 npm start
 ```
 
-The GUI lets you choose the loader, Minecraft version and memory before it downloads the server.
+You can also start the single program directly:
 
-## Notes
+```bash
+node mcsmaker.js
+```
 
-Forge and Fabric are downloaded through mcutils as requested. The selected version has to be available from the mcutils server-jars endpoint.
+The program then opens this menu:
+
+```text
+1) Neuen Server erstellen
+2) Server starten
+3) Server stoppen
+4) Serverliste und Status
+5) Logs anzeigen
+6) Backup erstellen
+7) Server löschen
+8) Systemcheck
+0) Beenden
+```
+
+## Optional global command
+
+```bash
+sudo npm install -g .
+mcsmaker
+```
+
+Set `MCSMAKER_HOME` if you want another data directory:
+
+```bash
+MCSMAKER_HOME=/srv/minecraft npm start
+```
