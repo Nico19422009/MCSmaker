@@ -386,7 +386,9 @@ initialize_config() {
     fi
   fi
 
-  ((created)) && check_first_start_apt_packages
+  if ((created)); then
+    check_first_start_apt_packages
+  fi
 }
 
 check_first_start_apt_packages() {
