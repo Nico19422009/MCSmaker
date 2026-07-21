@@ -177,6 +177,7 @@ hard_kill_prompt	Force-stop the server process? [y/N]: 	Server-Prozess hart been
 session_killed	The server process was force-stopped.	Server-Prozess wurde hart beendet.
 command_pipe_missing	The server command pipe is unavailable.	Die Command-Pipe des Servers ist nicht verfügbar.
 runtime_state_invalid	Unsafe runtime path: %s	Unsicherer Laufzeit-Pfad: %s
+external_server_running	A server process already runs in this directory (PID %s), but it is not managed by MCSMaker 3.1. Stop it before continuing.	In diesem Ordner läuft bereits ein Server-Prozess (PID %s), der nicht von MCSMaker 3.1 verwaltet wird. Stoppe ihn zuerst.
 console_read_failed	Could not read the console. The server may have just stopped.	Konsole konnte nicht gelesen werden. Der Server wurde eventuell gerade beendet.
 showing_latest_log	Server is stopped. Showing logs/latest.log.	Server läuft nicht. Zeige logs/latest.log.
 no_console_log	No console output or log file exists yet.	Noch keine Konsole oder Logdatei vorhanden.
@@ -190,6 +191,7 @@ console_help_notice	Use /back to leave this view. Other input is sent to Minecra
 console_send_failed	The command could not be sent.	Der Befehl konnte nicht gesendet werden.
 status_title	Server status	Server-Status
 status_running	RUNNING	LÄUFT
+status_external	RUNNING (external)	LÄUFT (extern)
 status_stopped	STOPPED	GESTOPPT
 status_type	Type	Typ
 status_minecraft	Minecraft	Minecraft
@@ -1377,6 +1379,28 @@ server_running() {
   return 0
 }
 
+external_server_pid() {
+  local cwd_link pid process_directory command_line managed_pid=""
+  managed_pid=$(server_pid || true)
+
+  for cwd_link in /proc/[1-9][0-9]*/cwd; do
+    pid="${cwd_link#/proc/}"
+    pid="${pid%/cwd}"
+    [[ "$pid" != "$$" && "$pid" != "$managed_pid" ]] || continue
+    process_directory=$(readlink -f "$cwd_link" 2>/dev/null || true)
+    [[ "$process_directory" == "$MANAGED_SERVER_DIR" ]] || continue
+    [[ -r "/proc/$pid/cmdline" ]] || continue
+    command_line=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+    case "$command_line" in
+      *java*|*server.jar*|*start.sh*|*run.sh*)
+        printf '%s\n' "$pid"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 clear_runtime_state() {
   [[ -f "$MANAGED_PID_FILE" ]] && rm -f -- "$MANAGED_PID_FILE"
   [[ -p "$MANAGED_INPUT_FIFO" ]] && rm -f -- "$MANAGED_INPUT_FIFO"
@@ -1384,11 +1408,16 @@ clear_runtime_state() {
 }
 
 server_start() {
-  local pid temporary_pid
+  local pid temporary_pid external_pid=""
   require_management_tools || return 1
   if server_running; then
     warn_msg server_already_running
     return 0
+  fi
+  external_pid=$(external_server_pid || true)
+  if [[ -n "$external_pid" ]]; then
+    warn_msg external_server_running "$external_pid"
+    return 1
   fi
 
   if [[ ! -f "$MANAGED_SERVER_DIR/eula.txt" ]] || \
@@ -1468,9 +1497,14 @@ server_send_command() {
 }
 
 server_stop() {
-  local answer second pid=""
+  local answer second pid="" external_pid=""
   if ! server_running; then
     clear_runtime_state
+    external_pid=$(external_server_pid || true)
+    if [[ -n "$external_pid" ]]; then
+      warn_msg external_server_running "$external_pid"
+      return 1
+    fi
     warn_msg server_not_running
     return 0
   fi
@@ -1622,7 +1656,7 @@ server_live_console() {
 }
 
 server_status() {
-  local state pid="" elapsed="" disk addon_count=0 display_version
+  local state pid="" elapsed="" disk addon_count=0 display_version external_pid=""
   local addon_directories=()
   state=$(msg status_stopped)
   disk=$(msg unknown)
@@ -1633,6 +1667,15 @@ server_status() {
     pid=$(server_pid || true)
     if [[ -n "$pid" ]] && command -v ps >/dev/null 2>&1; then
       elapsed=$(ps -o etime= -p "$pid" 2>/dev/null | xargs || true)
+    fi
+  else
+    external_pid=$(external_server_pid || true)
+    if [[ -n "$external_pid" ]]; then
+      state=$(msg status_external)
+      pid="$external_pid"
+      if command -v ps >/dev/null 2>&1; then
+        elapsed=$(ps -o etime= -p "$pid" 2>/dev/null | xargs || true)
+      fi
     fi
   fi
   command -v du >/dev/null 2>&1 && disk=$(du -sh "$MANAGED_SERVER_DIR" 2>/dev/null | awk '{print $1}')
