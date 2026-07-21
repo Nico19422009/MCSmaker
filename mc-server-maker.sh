@@ -70,6 +70,12 @@ load_messages() {
   done <<'EOF'
 error_label	ERROR	FEHLER
 config_created	Configuration created: %s	Konfiguration erstellt: %s
+first_start_dependencies	Checking required APT packages ...	Prüfe erforderliche APT-Pakete ...
+missing_apt_packages	Missing APT packages: %s	Fehlende APT-Pakete: %s
+install_apt_packages	Install missing packages now? [y/N]:	Fehlende Pakete jetzt installieren? [j/N]:
+apt_installing	Installing missing APT packages ...	Installiere fehlende APT-Pakete ...
+apt_install_failed	Could not install the missing APT packages.	Fehlende APT-Pakete konnten nicht installiert werden.
+apt_manual_hint	Install them with: sudo apt update && sudo apt install %s	Installiere sie mit: sudo apt update && sudo apt install %s
 config_save_failed	Could not write configuration: %s	Konfiguration konnte nicht geschrieben werden: %s
 language_saved	Language saved: English	Sprache gespeichert: Deutsch
 current_language	Current language: %s	Aktuelle Sprache: %s
@@ -378,6 +384,40 @@ initialize_config() {
     if save_language_config; then
       success_msg config_created "$CONFIG_FILE"
     fi
+  fi
+
+  ((created)) && check_first_start_apt_packages
+}
+
+check_first_start_apt_packages() {
+  local missing=() answer package
+  command -v apt-get >/dev/null 2>&1 || return 0
+
+  info_msg first_start_dependencies
+  for package in curl jq default-jdk; do
+    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then
+      missing+=("$package")
+    fi
+  done
+  ((${#missing[@]})) || return 0
+
+  warn_msg missing_apt_packages "${missing[*]}"
+  if [[ -t 0 ]]; then
+    msg install_apt_packages
+    read -r answer
+    case "${answer,,}" in
+      j|ja|y|yes)
+        info_msg apt_installing
+        if ! sudo apt-get update || ! sudo apt-get install -y -- "${missing[@]}"; then
+          warn_msg apt_install_failed
+          warn_msg apt_manual_hint "${missing[*]}"
+          return 1
+        fi
+        ;;
+      *) warn_msg apt_manual_hint "${missing[*]}" ;;
+    esac
+  else
+    warn_msg apt_manual_hint "${missing[*]}"
   fi
 }
 
@@ -1602,17 +1642,29 @@ draw_live_console() {
   printf '> %s' "$input"
 }
 
+console_log_signature() {
+  local file=""
+  if [[ -f "$MANAGED_CONSOLE_LOG" ]]; then
+    file="$MANAGED_CONSOLE_LOG"
+  elif [[ -f "$MANAGED_SERVER_DIR/logs/latest.log" ]]; then
+    file="$MANAGED_SERVER_DIR/logs/latest.log"
+  fi
+  [[ -n "$file" ]] || { printf '%s' 'missing'; return 0; }
+  stat -c '%Y:%s' -- "$file" 2>/dev/null || wc -c <"$file"
+}
+
 server_live_console() {
-  local input="" key="" notice="" last_refresh=-1 normalized
+  local input="" key="" notice="" last_log_signature="" current_log_signature normalized
   server_running || { warn_msg server_not_running; return 1; }
   [[ -t 0 && -t 1 ]] || { warn_msg console_tty_required; return 1; }
 
   draw_live_console "$input" "$notice"
-  last_refresh=$SECONDS
+  last_log_signature=$(console_log_signature)
   while server_running; do
-    if ((SECONDS != last_refresh)); then
+    current_log_signature=$(console_log_signature)
+    if [[ "$current_log_signature" != "$last_log_signature" ]]; then
       draw_live_console "$input" "$notice"
-      last_refresh=$SECONDS
+      last_log_signature="$current_log_signature"
     fi
 
     if IFS= read -rsn1 -t 0.15 key; then
@@ -1645,7 +1697,7 @@ server_live_console() {
         input+="$key"
       fi
       draw_live_console "$input" "$notice"
-      last_refresh=$SECONDS
+      last_log_signature=$(console_log_signature)
     fi
   done
 
