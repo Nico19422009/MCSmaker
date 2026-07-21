@@ -5,13 +5,16 @@
 
 set -Eeuo pipefail
 
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="3.0.0"
+PROJECT_URL="https://github.com/Nico19422009/MCSmaker"
 PAPER_API="https://fill.papermc.io/v3"
-PAPER_USER_AGENT="${MCSMAKER_USER_AGENT:-MCSMaker/${SCRIPT_VERSION} (https://chatgpt.com/)}"
+PAPER_USER_AGENT="${MCSMAKER_USER_AGENT:-Nico19422009/MCSmaker/${SCRIPT_VERSION} (${PROJECT_URL})}"
 FABRIC_META="https://meta.fabricmc.net/v2"
 FORGE_FILES="https://files.minecraftforge.net/net/minecraftforge/forge"
 FORGE_MAVEN="https://maven.minecraftforge.net/net/minecraftforge/forge"
 MOJANG_MANIFEST="https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+MODRINTH_API="https://api.modrinth.com/v2"
+MODRINTH_USER_AGENT="${MODRINTH_USER_AGENT:-Nico19422009/MCSmaker/${SCRIPT_VERSION} (${PROJECT_URL})}"
 
 PLATFORM=""
 REQUESTED_VERSION="latest"
@@ -28,6 +31,10 @@ INSTALL_DETAIL=""
 JAVA_COMMAND="${JAVA_BIN:-java}"
 VANILLA_MANIFEST_JSON=""
 FORGE_PROMOTIONS_JSON=""
+MANAGED_SERVER_DIR=""
+MANAGED_PLATFORM=""
+MANAGED_VERSION=""
+MANAGED_SESSION=""
 
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'
@@ -76,9 +83,13 @@ MCSMaker ${SCRIPT_VERSION}
 
 Benutzung:
   ./mc-server-maker.sh
-  ./mc-server-maker.sh --type paper --version 26.1.2 --dir ./mein-server --accept-eula
+  ./mc-server-maker.sh create --type paper --version 26.1.2 --dir ./mein-server --accept-eula
+  ./mc-server-maker.sh manage ./mein-server
+  ./mc-server-maker.sh start|stop|restart|status|logs|console ./mein-server
+  ./mc-server-maker.sh command ./mein-server "say Server läuft!"
+  ./mc-server-maker.sh addon ./mein-server "simple voice chat"
 
-Optionen:
+Erstellen:
   -t, --type TYPE          paper, forge, fabric oder vanilla
   -v, --version VERSION    Minecraft-Version oder "latest" (Standard)
   -d, --dir PFAD           Zielordner
@@ -90,7 +101,20 @@ Optionen:
       --skip-java-check    Prüfung der installierten Java-Version überspringen
   -h, --help               Diese Hilfe anzeigen
 
-Ohne Optionen startet ein interaktives Menü.
+Management:
+  manage [ORDNER]          Interaktives Server-Menü
+  start [ORDNER]           Server im Hintergrund starten
+  stop [ORDNER]            Server sauber stoppen
+  restart [ORDNER]         Server neustarten
+  status [ORDNER]          Server-Status anzeigen
+  logs [ORDNER] [ZEILEN]   Konsole/Logs anzeigen
+  console [ORDNER]         Live-Konsole öffnen (Strg+B, dann D zum Trennen)
+  command ORDNER BEFEHL    Konsolenbefehl senden
+  addon ORDNER [SUCHE]     Mod oder Plugin suchen und installieren
+  backup [ORDNER]          Server-Backup erstellen
+
+Ohne Optionen startet das komplette interaktive Menü.
+Für Hintergrund-Konsole und Commands wird tmux benötigt.
 EOF
 }
 
@@ -139,9 +163,11 @@ parse_args() {
 }
 
 choose_interactively() {
-  local choice input
+  local show_header="${1:-1}" choice input
 
-  show_banner
+  if ((show_header)); then
+    show_banner
+  fi
   printf '%s\n' 'Welche Server-Art willst du?'
   printf '%s\n' '  1) Paper    - Plugins und gute Performance'
   printf '%s\n' '  2) Forge    - Forge-Mods'
@@ -245,6 +271,13 @@ paper_get() {
     --proto '=https' -H "User-Agent: $PAPER_USER_AGENT" "$url"
 }
 
+modrinth_get() {
+  local url="$1"
+  curl --fail --location --silent --show-error \
+    --retry 3 --retry-delay 2 --connect-timeout 20 \
+    --proto '=https' -H "User-Agent: $MODRINTH_USER_AGENT" "$url"
+}
+
 download_file() {
   local url="$1" output="$2" user_agent="${3:-}"
   local args=(
@@ -277,6 +310,7 @@ verify_checksum() {
   case "$algorithm" in
     sha1) command="sha1sum" ;;
     sha256) command="sha256sum" ;;
+    sha512) command="sha512sum" ;;
     *) die "Unbekannter Prüfsummen-Typ: $algorithm" ;;
   esac
 
@@ -730,6 +764,28 @@ write_info_file() {
   } >"$target"
 }
 
+write_machine_metadata() {
+  local target="$SERVER_DIR/.mcsmaker.json" temporary="$TMP_DIR/mcsmaker.json"
+  jq -n \
+    --arg platform "$PLATFORM" \
+    --arg minecraft_version "$MC_VERSION" \
+    --arg min_ram "$MIN_RAM" \
+    --arg max_ram "$MAX_RAM" \
+    --arg mcsmaker_version "$SCRIPT_VERSION" \
+    --arg created_at "$(date --iso-8601=seconds 2>/dev/null || date)" \
+    '{
+      schema: 1,
+      platform: $platform,
+      minecraft_version: $minecraft_version,
+      min_ram: $min_ram,
+      max_ram: $max_ram,
+      mcsmaker_version: $mcsmaker_version,
+      created_at: $created_at
+    }' >"$temporary"
+  backup_file "$target"
+  mv -- "$temporary" "$target"
+}
+
 install_selected_server() {
   case "$PLATFORM" in
     vanilla) install_vanilla ;;
@@ -745,6 +801,617 @@ install_selected_server() {
   fi
   write_eula
   write_info_file
+  write_machine_metadata
+}
+
+pause_menu() {
+  [[ -t 0 ]] || return 0
+  printf '\nEnter drücken zum Fortfahren ... '
+  read -r _
+}
+
+expand_user_path() {
+  case "$1" in
+    "~") printf '%s\n' "$HOME" ;;
+    "~/"*) printf '%s/%s\n' "$HOME" "${1:2}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+discover_servers() {
+  local file directory
+  local -A seen=()
+  DISCOVERED_SERVERS=()
+
+  if [[ -f "$PWD/start.sh" ]]; then
+    DISCOVERED_SERVERS+=("$PWD")
+    seen["$PWD"]=1
+  fi
+
+  while IFS= read -r -d '' file; do
+    directory=$(dirname -- "$file")
+    directory=$(cd -- "$directory" && pwd -P)
+    if [[ -f "$directory/start.sh" && -z "${seen[$directory]:-}" ]]; then
+      DISCOVERED_SERVERS+=("$directory")
+      seen["$directory"]=1
+    fi
+  done < <(
+    find "$PWD" -mindepth 1 -maxdepth 4 -type f \
+      \( -name '.mcsmaker.json' -o -name 'mcsmaker-info.txt' \) -print0 2>/dev/null
+  )
+}
+
+choose_server_directory() {
+  local choice manual index=1
+  discover_servers
+
+  printf '\nGefundene Server:\n'
+  if ((${#DISCOVERED_SERVERS[@]})); then
+    for manual in "${DISCOVERED_SERVERS[@]}"; do
+      printf '  %d) %s\n' "$index" "$manual"
+      ((index += 1))
+    done
+  else
+    printf '  Keine im aktuellen Ordner gefunden.\n'
+  fi
+  printf '  m) Pfad manuell eingeben\n'
+  printf 'Auswahl: '
+  read -r choice
+
+  if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#DISCOVERED_SERVERS[@]})); then
+    SELECTED_SERVER_DIR="${DISCOVERED_SERVERS[choice - 1]}"
+    return
+  fi
+
+  if [[ "$choice" == "m" || "$choice" == "M" || ${#DISCOVERED_SERVERS[@]} -eq 0 ]]; then
+    printf 'Server-Pfad: '
+    read -r manual
+    SELECTED_SERVER_DIR="$manual"
+    return
+  fi
+
+  die "Ungültige Server-Auswahl."
+}
+
+load_managed_metadata() {
+  local metadata="$MANAGED_SERVER_DIR/.mcsmaker.json" info_file="$MANAGED_SERVER_DIR/mcsmaker-info.txt"
+  MANAGED_PLATFORM=""
+  MANAGED_VERSION=""
+
+  if [[ -f "$metadata" ]] && jq -e . "$metadata" >/dev/null 2>&1; then
+    MANAGED_PLATFORM=$(jq -r '.platform // empty' "$metadata")
+    MANAGED_VERSION=$(jq -r '.minecraft_version // empty' "$metadata")
+  elif [[ -f "$info_file" ]]; then
+    MANAGED_PLATFORM=$(awk -F': ' '/^Server:/ {print tolower($2); exit}' "$info_file" | awk '{print $1}')
+    MANAGED_VERSION=$(awk -F': ' '/^Minecraft:/ {print $2; exit}' "$info_file")
+  fi
+
+  if [[ -z "$MANAGED_PLATFORM" ]]; then
+    if [[ -d "$MANAGED_SERVER_DIR/plugins" ]]; then
+      MANAGED_PLATFORM="paper"
+    elif [[ -f "$MANAGED_SERVER_DIR/run.sh" && -d "$MANAGED_SERVER_DIR/mods" ]]; then
+      MANAGED_PLATFORM="forge"
+    elif [[ -d "$MANAGED_SERVER_DIR/mods" ]]; then
+      MANAGED_PLATFORM="fabric"
+    else
+      MANAGED_PLATFORM="unknown"
+    fi
+  fi
+
+  MANAGED_PLATFORM="${MANAGED_PLATFORM,,}"
+  MANAGED_VERSION="${MANAGED_VERSION:-unknown}"
+}
+
+managed_session_name() {
+  local base safe checksum
+  base=$(basename -- "$MANAGED_SERVER_DIR")
+  safe=$(printf '%s' "$base" | sed 's/[^A-Za-z0-9_]/_/g' | tr -d '\n')
+  safe="${safe:0:24}"
+  checksum=$(printf '%s' "$MANAGED_SERVER_DIR" | cksum | awk '{print $1}')
+  printf 'mcsmaker_%s_%s\n' "${safe:-server}" "$checksum"
+}
+
+set_managed_server() {
+  local requested="${1:-}"
+
+  if [[ -z "$requested" ]]; then
+    if [[ -t 0 ]]; then
+      choose_server_directory
+      requested="$SELECTED_SERVER_DIR"
+    elif [[ -f "$PWD/start.sh" ]]; then
+      requested="$PWD"
+    else
+      die "Server-Ordner fehlt."
+    fi
+  fi
+
+  requested=$(expand_user_path "$requested")
+  [[ -d "$requested" ]] || die "Server-Ordner existiert nicht: $requested"
+  MANAGED_SERVER_DIR=$(cd -- "$requested" && pwd -P)
+  [[ -f "$MANAGED_SERVER_DIR/start.sh" ]] || die "Kein start.sh in $MANAGED_SERVER_DIR gefunden."
+  if [[ ! -x "$MANAGED_SERVER_DIR/start.sh" ]]; then
+    chmod +x "$MANAGED_SERVER_DIR/start.sh" || die "start.sh konnte nicht ausführbar gemacht werden."
+  fi
+
+  load_managed_metadata
+  MANAGED_SESSION=$(managed_session_name)
+}
+
+require_tmux() {
+  if command -v tmux >/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn "tmux fehlt. Es wird für Hintergrund-Server, Live-Konsole und Commands gebraucht."
+  cat >&2 <<'EOF'
+Installieren:
+  Debian/Ubuntu: sudo apt install tmux
+  Fedora:        sudo dnf install tmux
+  Arch:          sudo pacman -S tmux
+EOF
+  return 1
+}
+
+server_running() {
+  command -v tmux >/dev/null 2>&1 && tmux has-session -t "$MANAGED_SESSION" 2>/dev/null
+}
+
+server_start() {
+  require_tmux || return 1
+  if server_running; then
+    warn "Server läuft bereits."
+    return 0
+  fi
+
+  if [[ ! -f "$MANAGED_SERVER_DIR/eula.txt" ]] || \
+     ! grep -Eq '^[[:space:]]*eula=true[[:space:]]*$' "$MANAGED_SERVER_DIR/eula.txt"; then
+    warn "EULA ist nicht akzeptiert. Lies https://aka.ms/MinecraftEULA und setze eula=true."
+    return 1
+  fi
+
+  info "Starte Server in tmux-Session $MANAGED_SESSION ..."
+  tmux new-session -d -s "$MANAGED_SESSION" -c "$MANAGED_SERVER_DIR" "exec ./start.sh"
+  sleep 1
+
+  if server_running; then
+    success "Server wurde gestartet."
+  else
+    warn "Server ist direkt wieder beendet worden. Letzte Logzeilen:"
+    if [[ -f "$MANAGED_SERVER_DIR/logs/latest.log" ]]; then
+      tail -n 40 "$MANAGED_SERVER_DIR/logs/latest.log"
+    fi
+    return 1
+  fi
+}
+
+send_command_raw() {
+  local command="$1"
+  tmux send-keys -t "$MANAGED_SESSION" -l -- "$command"
+  tmux send-keys -t "$MANAGED_SESSION" Enter
+}
+
+server_send_command() {
+  local command="${1:-}"
+  require_tmux || return 1
+  server_running || { warn "Server läuft nicht."; return 1; }
+
+  if [[ -z "$command" ]]; then
+    printf 'Minecraft-Befehl ohne /: '
+    read -r command
+  fi
+  [[ -n "$command" ]] || { warn "Leerer Befehl."; return 1; }
+  [[ "$command" != *$'\n'* && "$command" != *$'\r'* ]] || { warn "Mehrzeilige Befehle sind nicht erlaubt."; return 1; }
+  command="${command#/}"
+
+  send_command_raw "$command"
+  success "Befehl gesendet: $command"
+}
+
+server_stop() {
+  local answer second
+  require_tmux || return 1
+  if ! server_running; then
+    warn "Server läuft nicht."
+    return 0
+  fi
+
+  info "Sende stop und warte auf sauberes Herunterfahren ..."
+  send_command_raw "stop"
+  for ((second = 0; second < 30; second++)); do
+    if ! server_running; then
+      success "Server wurde sauber gestoppt."
+      return 0
+    fi
+    sleep 1
+  done
+
+  warn "Server reagiert nach 30 Sekunden noch."
+  if [[ -t 0 ]]; then
+    printf 'tmux-Session hart beenden? [j/N]: '
+    read -r answer
+    case "$answer" in
+      j|J|ja|JA|Ja|y|Y|yes|YES|Yes)
+        tmux kill-session -t "$MANAGED_SESSION"
+        warn "Session wurde hart beendet."
+        ;;
+    esac
+  fi
+  return 1
+}
+
+server_restart() {
+  if server_running; then
+    server_stop || return 1
+  fi
+  server_start
+}
+
+server_recent_console() {
+  local lines="${1:-100}"
+  [[ "$lines" =~ ^[0-9]+$ ]] || lines=100
+  ((lines > 0 && lines <= 5000)) || lines=100
+
+  if server_running; then
+    if ! tmux capture-pane -p -t "$MANAGED_SESSION" -S "-$lines"; then
+      warn "Konsole konnte nicht gelesen werden. Die Session wurde eventuell gerade beendet."
+      return 1
+    fi
+  elif [[ -f "$MANAGED_SERVER_DIR/logs/latest.log" ]]; then
+    warn "Server läuft nicht. Zeige logs/latest.log."
+    tail -n "$lines" "$MANAGED_SERVER_DIR/logs/latest.log"
+  else
+    warn "Noch keine Konsole oder Logdatei vorhanden."
+  fi
+}
+
+server_live_console() {
+  require_tmux || return 1
+  server_running || { warn "Server läuft nicht."; return 1; }
+  [[ -t 0 && -t 1 ]] || { warn "Die Live-Konsole braucht ein echtes Terminal."; return 1; }
+  info "Konsole geöffnet. Trennen mit Strg+B und danach D."
+  if [[ -n "${TMUX:-}" ]]; then
+    tmux switch-client -t "$MANAGED_SESSION"
+  else
+    tmux attach-session -t "$MANAGED_SESSION"
+  fi
+}
+
+server_status() {
+  local state="GESTOPPT" pane_pid="" elapsed="" disk="unbekannt" addon_count=0
+  local addon_directories=()
+  if server_running; then
+    state="LÄUFT"
+    pane_pid=$(tmux display-message -p -t "$MANAGED_SESSION" '#{pane_pid}' 2>/dev/null || true)
+    if [[ -n "$pane_pid" ]] && command -v ps >/dev/null 2>&1; then
+      elapsed=$(ps -o etime= -p "$pane_pid" 2>/dev/null | xargs || true)
+    fi
+  fi
+  command -v du >/dev/null 2>&1 && disk=$(du -sh "$MANAGED_SERVER_DIR" 2>/dev/null | awk '{print $1}')
+  [[ -d "$MANAGED_SERVER_DIR/mods" ]] && addon_directories+=("$MANAGED_SERVER_DIR/mods")
+  [[ -d "$MANAGED_SERVER_DIR/plugins" ]] && addon_directories+=("$MANAGED_SERVER_DIR/plugins")
+  if ((${#addon_directories[@]})); then
+    addon_count=$(find "${addon_directories[@]}" -maxdepth 1 -type f -name '*.jar' -print 2>/dev/null | wc -l | tr -d ' ')
+  fi
+
+  printf '\nServer-Status\n'
+  printf '  Status:    %s\n' "$state"
+  printf '  Typ:       %s\n' "$MANAGED_PLATFORM"
+  printf '  Minecraft: %s\n' "$MANAGED_VERSION"
+  printf '  Ordner:    %s\n' "$MANAGED_SERVER_DIR"
+  printf '  Größe:     %s\n' "$disk"
+  printf '  Addons:    %s\n' "$addon_count"
+  [[ -n "$pane_pid" ]] && printf '  Prozess:   %s\n' "$pane_pid"
+  [[ -n "$elapsed" ]] && printf '  Laufzeit:  %s\n' "$elapsed"
+  return 0
+}
+
+server_backup() {
+  local backup_dir archive timestamp was_running=0 result=0
+  command -v tar >/dev/null 2>&1 || { warn "tar fehlt."; return 1; }
+
+  backup_dir="$MANAGED_SERVER_DIR/backups"
+  timestamp=$(date +%Y%m%d-%H%M%S)
+  archive="$backup_dir/server-backup-${timestamp}.tar.gz"
+  mkdir -p -- "$backup_dir"
+
+  if server_running; then
+    was_running=1
+    info "Pausiere Welt-Speicherung kurz für ein sauberes Backup ..."
+    if ! send_command_raw "save-off" || ! send_command_raw "save-all flush"; then
+      warn "Speicherbefehle konnten nicht vollständig gesendet werden."
+      return 1
+    fi
+    sleep 2
+  fi
+
+  info "Erstelle Backup ..."
+  if ! tar --exclude='./backups' --exclude='./logs' --exclude='./cache' \
+    -C "$MANAGED_SERVER_DIR" -czf "$archive" .; then
+    result=1
+  fi
+
+  if ((was_running)); then
+    send_command_raw "save-on" || true
+  fi
+
+  if ((result == 0)); then
+    success "Backup erstellt: $archive"
+  else
+    warn "Backup ist fehlgeschlagen."
+  fi
+  return "$result"
+}
+
+configure_addon_type() {
+  case "$MANAGED_PLATFORM" in
+    paper)
+      ADDON_KIND="plugin"
+      ADDON_TARGET_DIR="$MANAGED_SERVER_DIR/plugins"
+      ADDON_LOADERS_JSON='["paper","purpur","spigot","bukkit","folia"]'
+      ADDON_FACETS=$(jq -cn --arg version "$MANAGED_VERSION" '[
+        ["all_project_types:plugin"],
+        ["categories:paper","categories:purpur","categories:spigot","categories:bukkit","categories:folia"],
+        ["versions:\($version)"],
+        ["server_side:required","server_side:optional"]
+      ]')
+      ;;
+    fabric)
+      ADDON_KIND="mod"
+      ADDON_TARGET_DIR="$MANAGED_SERVER_DIR/mods"
+      ADDON_LOADERS_JSON='["fabric"]'
+      ADDON_FACETS=$(jq -cn --arg version "$MANAGED_VERSION" '[
+        ["all_project_types:mod"],
+        ["categories:fabric"],
+        ["versions:\($version)"],
+        ["server_side:required","server_side:optional"]
+      ]')
+      ;;
+    forge)
+      ADDON_KIND="mod"
+      ADDON_TARGET_DIR="$MANAGED_SERVER_DIR/mods"
+      ADDON_LOADERS_JSON='["forge"]'
+      ADDON_FACETS=$(jq -cn --arg version "$MANAGED_VERSION" '[
+        ["all_project_types:mod"],
+        ["categories:forge"],
+        ["versions:\($version)"],
+        ["server_side:required","server_side:optional"]
+      ]')
+      ;;
+    vanilla)
+      warn "Vanilla unterstützt keine Paper-Plugins oder Fabric/Forge-Mods."
+      return 1
+      ;;
+    *)
+      warn "Server-Typ konnte nicht erkannt werden. Addon-Suche ist nicht möglich."
+      return 1
+      ;;
+  esac
+}
+
+ensure_temp_directory() {
+  if [[ -z "$TMP_DIR" || ! -d "$TMP_DIR" ]]; then
+    TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/mcsmaker.XXXXXXXX")
+  fi
+}
+
+addon_search_install() {
+  local query="${1:-}" search_url response count selection selected project_id title
+  local versions_url versions version version_number file download_url raw_filename filename sha512 downloaded
+  local required_dependencies game_versions_json
+
+  configure_addon_type || return 1
+  check_dependencies
+  [[ "$MANAGED_VERSION" != "unknown" ]] || { warn "Minecraft-Version ist unbekannt."; return 1; }
+
+  if [[ -z "$query" ]]; then
+    printf '%s-Suche auf Modrinth: ' "${ADDON_KIND^}"
+    read -r query
+  fi
+  [[ -n "$query" ]] || { warn "Suchbegriff ist leer."; return 1; }
+
+  info "Suche passende ${ADDON_KIND}s für $MANAGED_PLATFORM $MANAGED_VERSION ..."
+  search_url="$MODRINTH_API/search?query=$(urlencode "$query")&facets=$(urlencode "$ADDON_FACETS")&index=downloads&limit=10"
+  response=$(modrinth_get "$search_url") || { warn "Modrinth-Suche fehlgeschlagen."; return 1; }
+  count=$(jq '.hits | length' <<<"$response")
+  if ((count == 0)); then
+    warn "Keine kompatiblen Treffer gefunden."
+    return 1
+  fi
+
+  printf '\nTreffer auf Modrinth:\n'
+  while IFS=$'\t' read -r selection title download_url raw_filename; do
+    printf '  %s) %s  [%s Downloads]\n     %s\n' "$selection" "$title" "$download_url" "$raw_filename"
+  done < <(
+    jq -r '.hits | to_entries[] | [
+      (.key + 1),
+      .value.title,
+      .value.downloads,
+      (.value.description | gsub("[\\t\\r\\n]+"; " ") | .[0:110])
+    ] | @tsv' <<<"$response"
+  )
+  printf '  0) Abbrechen\nAuswahl: '
+  read -r selection
+  [[ "$selection" =~ ^[0-9]+$ ]] || { warn "Ungültige Auswahl."; return 1; }
+  ((selection == 0)) && return 0
+  ((selection >= 1 && selection <= count)) || { warn "Ungültige Auswahl."; return 1; }
+
+  selected=$(jq -c --argjson index "$((selection - 1))" '.hits[$index]' <<<"$response")
+  project_id=$(jq -r '.project_id' <<<"$selected")
+  title=$(jq -r '.title' <<<"$selected")
+
+  game_versions_json=$(jq -cn --arg version "$MANAGED_VERSION" '[$version]')
+  versions_url="$MODRINTH_API/project/$(urlencode "$project_id")/version?loaders=$(urlencode "$ADDON_LOADERS_JSON")&game_versions=$(urlencode "$game_versions_json")&include_changelog=false"
+  versions=$(modrinth_get "$versions_url") || { warn "Versionen konnten nicht geladen werden."; return 1; }
+  version=$(jq -c 'first(.[] | select(.version_type == "release")) // .[0] // empty' <<<"$versions")
+  [[ -n "$version" ]] || { warn "Keine passende Download-Version gefunden."; return 1; }
+  version_number=$(jq -r '.version_number' <<<"$version")
+  file=$(jq -c 'first(.files[] | select(.primary == true)) // .files[0] // empty' <<<"$version")
+  [[ -n "$file" ]] || { warn "Version enthält keine Datei."; return 1; }
+
+  download_url=$(jq -r '.url' <<<"$file")
+  raw_filename=$(jq -r '.filename' <<<"$file")
+  filename=$(basename -- "$raw_filename")
+  sha512=$(jq -r '.hashes.sha512 // empty' <<<"$file")
+  [[ "$filename" == *.jar ]] || { warn "Download ist keine JAR-Datei."; return 1; }
+
+  ensure_temp_directory
+  downloaded="$TMP_DIR/$filename"
+  download_file "$download_url" "$downloaded" "$MODRINTH_USER_AGENT"
+  verify_checksum sha512 "$sha512" "$downloaded"
+  validate_jar "$downloaded"
+
+  mkdir -p -- "$ADDON_TARGET_DIR" "$MANAGED_SERVER_DIR/.mcsmaker"
+  backup_file "$ADDON_TARGET_DIR/$filename"
+  mv -- "$downloaded" "$ADDON_TARGET_DIR/$filename"
+  chmod 0644 "$ADDON_TARGET_DIR/$filename"
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$(date --iso-8601=seconds 2>/dev/null || date)" "$project_id" "$title" "$version_number" "$filename" \
+    >>"$MANAGED_SERVER_DIR/.mcsmaker/addons.tsv"
+
+  success "$title $version_number installiert: $filename"
+  required_dependencies=$(jq '[.dependencies[]? | select(.dependency_type == "required" and .project_id != null)] | length' <<<"$version")
+  if ((required_dependencies > 0)); then
+    warn "Dieses Addon meldet $required_dependencies benötigte Abhängigkeit(en). Prüfe die Modrinth-Seite des Projekts."
+  fi
+  if server_running; then
+    warn "Server läuft noch. Starte ihn neu, damit das Addon geladen wird."
+  fi
+  return 0
+}
+
+addon_files() {
+  configure_addon_type >/dev/null || return 1
+  [[ -d "$ADDON_TARGET_DIR" ]] || return 0
+  find "$ADDON_TARGET_DIR" -maxdepth 1 -type f -name '*.jar' -print0 2>/dev/null
+}
+
+addon_list() {
+  local file count=0
+  configure_addon_type || return 1
+  printf '\nInstallierte %ss:\n' "${ADDON_KIND^}"
+  while IFS= read -r -d '' file; do
+    ((count += 1))
+    printf '  %d) %s\n' "$count" "$(basename -- "$file")"
+  done < <(addon_files)
+  ((count > 0)) || printf '  Keine gefunden.\n'
+}
+
+addon_disable() {
+  local files=() file selection destination
+  configure_addon_type || return 1
+  while IFS= read -r -d '' file; do files+=("$file"); done < <(addon_files)
+  ((${#files[@]})) || { warn "Keine Addons zum Deaktivieren gefunden."; return 0; }
+
+  printf '\nAddon deaktivieren:\n'
+  for selection in "${!files[@]}"; do
+    printf '  %d) %s\n' "$((selection + 1))" "$(basename -- "${files[selection]}")"
+  done
+  printf '  0) Abbrechen\nAuswahl: '
+  read -r selection
+  [[ "$selection" =~ ^[0-9]+$ ]] || return 1
+  ((selection == 0)) && return 0
+  ((selection >= 1 && selection <= ${#files[@]})) || return 1
+
+  file="${files[selection - 1]}"
+  mkdir -p -- "$ADDON_TARGET_DIR/disabled"
+  destination="$ADDON_TARGET_DIR/disabled/$(basename -- "$file")"
+  backup_file "$destination"
+  mv -- "$file" "$destination"
+  success "Deaktiviert: $(basename -- "$file")"
+  if server_running; then
+    warn "Für die Änderung ist ein Neustart nötig."
+  fi
+  return 0
+}
+
+addon_enable() {
+  local disabled_dir files=() file selection destination
+  configure_addon_type || return 1
+  disabled_dir="$ADDON_TARGET_DIR/disabled"
+  [[ -d "$disabled_dir" ]] || { warn "Keine deaktivierten Addons gefunden."; return 0; }
+  while IFS= read -r -d '' file; do files+=("$file"); done < <(
+    find "$disabled_dir" -maxdepth 1 -type f -name '*.jar' -print0 2>/dev/null
+  )
+  ((${#files[@]})) || { warn "Keine deaktivierten Addons gefunden."; return 0; }
+
+  printf '\nAddon aktivieren:\n'
+  for selection in "${!files[@]}"; do
+    printf '  %d) %s\n' "$((selection + 1))" "$(basename -- "${files[selection]}")"
+  done
+  printf '  0) Abbrechen\nAuswahl: '
+  read -r selection
+  [[ "$selection" =~ ^[0-9]+$ ]] || return 1
+  ((selection == 0)) && return 0
+  ((selection >= 1 && selection <= ${#files[@]})) || return 1
+
+  file="${files[selection - 1]}"
+  destination="$ADDON_TARGET_DIR/$(basename -- "$file")"
+  backup_file "$destination"
+  mv -- "$file" "$destination"
+  success "Aktiviert: $(basename -- "$file")"
+  if server_running; then
+    warn "Für die Änderung ist ein Neustart nötig."
+  fi
+  return 0
+}
+
+addon_menu() {
+  local choice
+  while true; do
+    printf '\nAddon-Manager (%s %s)\n' "$MANAGED_PLATFORM" "$MANAGED_VERSION"
+    printf '%s\n' '  1) Auf Modrinth suchen und installieren'
+    printf '%s\n' '  2) Installierte Addons anzeigen'
+    printf '%s\n' '  3) Addon deaktivieren'
+    printf '%s\n' '  4) Addon wieder aktivieren'
+    printf '%s\n' '  0) Zurück'
+    printf 'Auswahl: '
+    read -r choice
+    case "$choice" in
+      1) addon_search_install || true; pause_menu ;;
+      2) addon_list || true; pause_menu ;;
+      3) addon_disable || true; pause_menu ;;
+      4) addon_enable || true; pause_menu ;;
+      0) return ;;
+      *) warn "Ungültige Auswahl." ;;
+    esac
+  done
+}
+
+manage_server_menu() {
+  local choice command
+  [[ -t 0 ]] || die "Das Management-Menü braucht ein Terminal."
+  while true; do
+    server_status
+    printf '\nServer-Management\n'
+    printf '%s\n' '  1) Server starten'
+    printf '%s\n' '  2) Live-Konsole öffnen'
+    printf '%s\n' '  3) Letzte Konsolenzeilen'
+    printf '%s\n' '  4) Command senden'
+    printf '%s\n' '  5) Server stoppen'
+    printf '%s\n' '  6) Server neustarten'
+    printf '%s\n' '  7) Mods/Plugins verwalten'
+    printf '%s\n' '  8) Server-Backup erstellen'
+    printf '%s\n' '  0) Zurück'
+    printf 'Auswahl: '
+    read -r choice
+    case "$choice" in
+      1) server_start || true; pause_menu ;;
+      2) server_live_console || true ;;
+      3) server_recent_console 120 || true; pause_menu ;;
+      4)
+        printf 'Command ohne /: '
+        read -r command
+        server_send_command "$command" || true
+        pause_menu
+        ;;
+      5) server_stop || true; pause_menu ;;
+      6) server_restart || true; pause_menu ;;
+      7) addon_menu ;;
+      8) server_backup || true; pause_menu ;;
+      0) return ;;
+      *) warn "Ungültige Auswahl." ;;
+    esac
+  done
 }
 
 print_result() {
@@ -769,16 +1436,23 @@ print_result() {
   fi
 }
 
-main() {
-  if (($# == 0)); then
-    [[ -t 0 ]] || die "Ohne Terminal bitte --type angeben. Nutze --help für Beispiele."
-    INTERACTIVE=1
-    choose_interactively
-  else
-    parse_args "$@"
-    [[ -n "$PLATFORM" ]] || die "--type fehlt. Nutze --help für ein Beispiel."
-  fi
+reset_creation_options() {
+  cleanup
+  PLATFORM=""
+  REQUESTED_VERSION="latest"
+  MC_VERSION=""
+  SERVER_DIR=""
+  MIN_RAM="1G"
+  MAX_RAM="4G"
+  ACCEPT_EULA=0
+  ALLOW_NONEMPTY=0
+  SKIP_JAVA_CHECK=0
+  INTERACTIVE=0
+  TMP_DIR=""
+  INSTALL_DETAIL=""
+}
 
+create_server_workflow() {
   normalize_platform
   normalize_ram
   if ((EUID == 0)); then
@@ -793,6 +1467,151 @@ main() {
   install_selected_server
   success "Installation abgeschlossen."
   print_result
+  cleanup
+  TMP_DIR=""
+}
+
+create_server_main() {
+  reset_creation_options
+  if (($# == 0)); then
+    [[ -t 0 ]] || die "Ohne Terminal bitte --type angeben. Nutze --help für Beispiele."
+    INTERACTIVE=1
+    choose_interactively
+  else
+    parse_args "$@"
+    [[ -n "$PLATFORM" ]] || die "--type fehlt. Nutze --help für ein Beispiel."
+  fi
+  create_server_workflow
+}
+
+interactive_create_action() {
+  reset_creation_options
+  INTERACTIVE=1
+  choose_interactively 0
+  create_server_workflow
+}
+
+interactive_manage_action() {
+  set_managed_server
+  manage_server_menu
+}
+
+run_menu_action() {
+  local result
+  set +e
+  (set -e; "$@")
+  result=$?
+  set -e
+  if ((result != 0)); then
+    warn "Aktion beendet (Fehlercode $result)."
+  fi
+  return 0
+}
+
+main_menu() {
+  local choice
+  [[ -t 0 ]] || die "Das Hauptmenü braucht ein Terminal. Nutze --help für CLI-Beispiele."
+
+  while true; do
+    show_banner
+    printf '%s\n' 'Was möchtest du machen?'
+    printf '%s\n' '  1) Neuen Minecraft-Server erstellen'
+    printf '%s\n' '  2) Vorhandenen Server verwalten'
+    printf '%s\n' '  3) CLI-Hilfe anzeigen'
+    printf '%s\n' '  0) Beenden'
+    printf '\nAuswahl: '
+    read -r choice
+    case "$choice" in
+      1) run_menu_action interactive_create_action; pause_menu ;;
+      2) run_menu_action interactive_manage_action; pause_menu ;;
+      3) usage; pause_menu ;;
+      0) success "Bis zum nächsten Server."; return ;;
+      *) warn "Ungültige Auswahl."; pause_menu ;;
+    esac
+  done
+}
+
+run_management_command() {
+  local subcommand="$1" directory="" lines="100" command="" query=""
+  shift
+
+  case "$subcommand" in
+    manage)
+      (($# <= 1)) || die "manage akzeptiert höchstens einen Server-Ordner."
+      set_managed_server "${1:-}"
+      manage_server_menu
+      ;;
+    start|stop|restart|status|console|backup)
+      (($# <= 1)) || die "$subcommand akzeptiert höchstens einen Server-Ordner."
+      set_managed_server "${1:-}"
+      case "$subcommand" in
+        start) server_start ;;
+        stop) server_stop ;;
+        restart) server_restart ;;
+        status) server_status ;;
+        console) server_live_console ;;
+        backup) server_backup ;;
+      esac
+      ;;
+    logs)
+      if (($# > 0)) && [[ "$1" =~ ^[0-9]+$ ]] && [[ -f "$PWD/start.sh" ]]; then
+        lines="$1"
+        shift
+      else
+        directory="${1:-}"
+        (($# == 0)) || shift
+        lines="${1:-100}"
+        (($# <= 1)) || die "logs erwartet: logs [ORDNER] [ZEILEN]"
+      fi
+      set_managed_server "$directory"
+      server_recent_console "$lines"
+      ;;
+    command)
+      (($# >= 2)) || die "command erwartet: command ORDNER BEFEHL"
+      directory="$1"
+      shift
+      command="$*"
+      set_managed_server "$directory"
+      server_send_command "$command"
+      ;;
+    addon)
+      (($# >= 1)) || die "addon erwartet mindestens einen Server-Ordner."
+      directory="$1"
+      shift
+      query="$*"
+      if [[ -z "$query" && ! -t 0 ]]; then
+        die "Ohne Terminal fehlt der Suchbegriff: addon ORDNER SUCHE"
+      fi
+      set_managed_server "$directory"
+      addon_search_install "$query"
+      ;;
+  esac
+}
+
+main() {
+  if (($# == 0)); then
+    main_menu
+    return
+  fi
+
+  case "$1" in
+    -h|--help|help)
+      usage
+      ;;
+    create)
+      shift
+      create_server_main "$@"
+      ;;
+    manage|start|stop|restart|status|logs|console|command|addon|backup)
+      run_management_command "$@"
+      ;;
+    -*)
+      create_server_main "$@"
+      ;;
+    *)
+      die "Unbekannter Befehl: $1. Nutze --help."
+      ;;
+  esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
